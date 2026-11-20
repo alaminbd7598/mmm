@@ -1,0 +1,8 @@
+{
+  "name": "MMM-DEMO (V.18.00)",
+  "description": "A comprehensive educational website with a dynamic course system and a fully functional admin dashboard for institute management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

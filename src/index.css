@@ -1,0 +1,297 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Hind Siliguri', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Hind Siliguri', monospace;
+}
+
+:root {
+  --maharat-navy-deep: #0a1738;
+  --maharat-navy: #192f64;
+  --maharat-navy-light: #1e4280;
+  --maharat-teal-deep: #004454;
+  --maharat-teal: #005a6e;
+  --maharat-teal-bright: #007c91;
+  --maharat-gold: #9c7a32;
+  --maharat-gold-mid: #c4962c;
+  --maharat-gold-bright: #e5b94c;
+}
+
+@layer base {
+  html,
+  html.light {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  html.font-scale-sm {
+    font-size: 14px;
+  }
+  html.font-scale-normal {
+    font-size: 14.5px;
+  }
+  html.font-scale-large {
+    font-size: 16px;
+  }
+  html.font-scale-larger {
+    font-size: 17.5px;
+  }
+  @media (min-width: 640px) {
+    html.font-scale-normal {
+      font-size: 15.5px;
+    }
+    html.font-scale-large {
+      font-size: 17px;
+    }
+    html.font-scale-larger {
+      font-size: 18.5px;
+    }
+  }
+  @media (min-width: 1536px) {
+    html.font-scale-normal {
+      font-size: 16px;
+    }
+    html.font-scale-large {
+      font-size: 17.5px;
+    }
+    html.font-scale-larger {
+      font-size: 19px;
+    }
+  }
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  html[lang="ar"],
+  html[dir="rtl"] body {
+    font-family: 'Cairo', 'Amiri', 'Plus Jakarta Sans', sans-serif;
+  }
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* 3D Perspective Tilt Effect for Leadership Cards & Portraits */
+.leadership-3d-stage {
+  perspective: 950px;
+}
+.leadership-3d-card {
+  transform-style: preserve-3d;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s ease;
+}
+.leadership-3d-card:hover {
+  transform: rotateX(2.5deg) rotateY(-3deg) translateY(-4px);
+}
+.leadership-3d-portrait {
+  transform: translateZ(24px);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.leadership-3d-card:hover .leadership-3d-portrait {
+  transform: translateZ(38px) scale(1.03);
+}
+@media (prefers-reduced-motion: reduce) {
+  .leadership-3d-card,
+  .leadership-3d-card:hover,
+  .leadership-3d-portrait,
+  .leadership-3d-card:hover .leadership-3d-portrait {
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 34s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* ============================================================================
+   ADAPTIVE MULTI-SCREEN FLUID SCALING SYSTEM (Generous Executive Proportions)
+   ============================================================================ */
+.cii-container-hero {
+  width: 100%;
+  max-width: min(1240px, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.cii-container-section {
+  width: 100%;
+  max-width: min(1300px, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.cii-container-media {
+  width: 100%;
+  max-width: min(1180px, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 1280px) and (max-width: 1535px) {
+  .cii-container-hero {
+    max-width: min(1240px, calc(100vw - 3rem));
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+  .cii-container-section {
+    max-width: min(1300px, calc(100vw - 3rem));
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+  .cii-container-media {
+    max-width: min(1180px, calc(100vw - 3rem));
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+@media (min-width: 1536px) {
+  .cii-container-hero {
+    max-width: clamp(1240px, 82vw, 1440px);
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+  .cii-container-section {
+    max-width: clamp(1300px, 84vw, 1520px);
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+  .cii-container-media {
+    max-width: clamp(1180px, 78vw, 1340px);
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+.cii-hero-title {
+  font-size: clamp(2.2rem, 3.3vw + 0.75rem, 3.7rem);
+  line-height: 1.18;
+  text-wrap: balance;
+}
+
+.cii-section-title {
+  font-size: clamp(1.75rem, 2.3vw + 0.65rem, 2.85rem);
+  line-height: 1.22;
+  text-wrap: balance;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Dedicated Official Institute Letterhead Structure (A4 Compatible) */
+.official-letterhead-a4 {
+  width: 100%;
+  max-width: 210mm;
+  margin-left: auto;
+  margin-right: auto;
+  background-color: #ffffff;
+  color: #0f172a;
+  box-sizing: border-box;
+  overflow: hidden;
+  word-break: break-word;
+  position: relative;
+}
+
+/* Strict A4 Print Media Styles */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 10.5pt !important;
+    line-height: 1.35 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide interactive web UI in print */
+  header,
+  nav,
+  footer,
+  .no-print,
+  #hero,
+  #news-ticker,
+  .cursor-tracker,
+  .fixed,
+  .sticky,
+  button:not(.allow-print),
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* When printing the official letterhead receipt, isolate it cleanly on a single A4 sheet */
+  body.printing-letterhead main > section:not(#fees) {
+    display: none !important;
+  }
+
+  .official-letterhead-a4 {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    margin: 0 auto !important;
+    padding: 6mm !important;
+    border: 2px solid #2e0249 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    overflow: hidden !important;
+  }
+
+  /* Retain print clarity and colors */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  .print-page {
+    width: 100% !important;
+    max-width: 190mm !important;
+    margin: 0 auto !important;
+    page-break-inside: avoid !important;
+  }
+
+  .page-break-after {
+    page-break-after: always !important;
+  }
+}

@@ -1,0 +1,37 @@
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+import {defineConfig} from 'vite';
+
+export default defineConfig(() => {
+  return {
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: {
+        '@': path.resolve(import.meta.dirname, '.'),
+      },
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'lucide-react',
+        'recharts',
+        'jspdf',
+        'html2canvas',
+        'qrcode',
+        'zod',
+        'motion/react',
+      ],
+    },
+    build: {
+      sourcemap: false,
+    },
+    server: {
+      allowedHosts: true as const,
+      // Allow disabling HMR and file watching in headless/automated environments via DISABLE_HMR.
+      hmr: process.env.DISABLE_HMR !== 'true',
+      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+  };
+});
