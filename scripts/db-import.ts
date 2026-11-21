@@ -82,6 +82,8 @@ async function hashAll(passwords: Map<string, string>): Promise<Record<string, s
 }
 
 async function main(): Promise<void> {
+  // DATABASE_URL comes from the environment or, as in Next.js, from .env files.
+  loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
   const args = process.argv.slice(2);
   const replace = args.includes('--replace');
   const files = args.filter((a) => !a.startsWith('--'));
