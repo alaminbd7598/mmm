@@ -435,8 +435,10 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
         const meta = await fetchStateMeta();
         if (!meta.ok) return;
         setMode(meta.data.mode === 'demo' ? 'demo' : 'database');
-        await flush();
-        await refetch();
+        // Reload only once the edits made while offline are stored. A flush that could not reach
+        // the server (network, 5xx) keeps them for the next tick; a refetch here would replace
+        // them with the server's state. A refused flush has already reloaded by itself.
+        if (await flush()) await refetch();
         return;
       }
       if (hasPendingChanges()) {
