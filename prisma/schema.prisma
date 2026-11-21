@@ -1,0 +1,238 @@
+// MySQL / MariaDB schema for the Maharat Model Madrasah CMS. See docs/ARCHITECTURE.md ("Prisma schema").
+// Every CMS record is stored as a JSON document string in `data` (LongText); the extra columns are
+// indexed copies of fields used for lookups and are rewritten from the document on every write.
+// The connection URL comes from prisma.config.ts (DATABASE_URL).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+/// Single row (id = 1). Its existence marks the database as seeded.
+model SiteMeta {
+  id        Int      @id
+  version   Int
+  updatedAt DateTime @updatedAt
+}
+
+/// One row per singleton CMS key (settings, popupConfig, rbacMatrix, ...).
+model SiteSetting {
+  key       String   @id
+  data      String   @db.LongText
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id                 String   @id
+  position           Int
+  data               String   @db.LongText
+  username           String   @unique
+  role               String
+  passwordHash       String?
+  mustChangePassword Boolean  @default(false)
+  disabled           Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([role])
+  @@index([position])
+}
+
+model Notice {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model NewsItem {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model Course {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model Event {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model BlogPost {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  slug      String?
+  status    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([status])
+  @@index([position])
+}
+
+/// photoGallery
+model GalleryItem {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+/// leads
+model AdmissionLead {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  status    String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([phone])
+  @@index([position])
+}
+
+/// admissionTokens2027
+model AdmissionToken {
+  id            String   @id
+  position      Int
+  data          String   @db.LongText
+  tokenCode     String?  @unique
+  guardianPhone String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([guardianPhone])
+  @@index([position])
+}
+
+/// leaveRequests
+model TeacherLeave {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  status    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([position])
+}
+
+model CareerJob {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model CareerApplication {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([position])
+}
+
+model CareerCandidate {
+  id           String   @id
+  position     Int
+  data         String   @db.LongText
+  email        String?  @unique
+  passwordHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([position])
+}
+
+model Complaint {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model CalendarEvent {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+model VirtualOfficeSession {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+/// emails
+model EmailLog {
+  id        String   @id
+  position  Int
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([position])
+}
+
+/// Small collections without a dedicated table (departmentVideos, activityVideos, guardianReels).
+model CollectionItem {
+  collection String
+  id         String
+  position   Int
+  data       String   @db.LongText
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([collection, id])
+  @@index([collection, position])
+}

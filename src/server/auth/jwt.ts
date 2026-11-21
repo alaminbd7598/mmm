@@ -21,12 +21,14 @@ export const MIN_JWT_SECRET_LENGTH = 32;
  */
 export const DEMO_JWT_SECRET = 'mmm-demo-mode-jwt-secret-not-for-production-use-0001';
 
+export type EnvLike = Readonly<Record<string, string | undefined>>;
+
 export type JwtSecretResult =
   | { ok: true; secret: Uint8Array }
   | { ok: false; error: string };
 
 /** Storage mode as decided by the environment (mirrors getStore(): DATABASE_URL set => database). */
-export function modeFromEnv(env: NodeJS.ProcessEnv = process.env): StorageMode {
+export function modeFromEnv(env: EnvLike = process.env): StorageMode {
   return env.DATABASE_URL && env.DATABASE_URL.trim() ? 'database' : 'demo';
 }
 
@@ -34,7 +36,7 @@ export function modeFromEnv(env: NodeJS.ProcessEnv = process.env): StorageMode {
  * Resolve the signing key. Database mode requires JWT_SECRET (>= 32 chars). Demo mode prefers a
  * valid JWT_SECRET and otherwise falls back to DEMO_JWT_SECRET.
  */
-export function resolveJwtSecret(mode: StorageMode, env: NodeJS.ProcessEnv = process.env): JwtSecretResult {
+export function resolveJwtSecret(mode: StorageMode, env: EnvLike = process.env): JwtSecretResult {
   const configured = env.JWT_SECRET?.trim() || '';
   if (configured.length >= MIN_JWT_SECRET_LENGTH) {
     return { ok: true, secret: new TextEncoder().encode(configured) };
@@ -106,7 +108,7 @@ async function verify(
   }
 }
 
-export function signStaffToken(session: StaffSession, secret: Uint8Array, opts: SignOptions = {}): Promise<string> {
+export async function signStaffToken(session: StaffSession, secret: Uint8Array, opts: SignOptions = {}): Promise<string> {
   const claims = staffClaimsSchema.parse(session);
   return sign(
     claims,
@@ -132,7 +134,7 @@ export async function verifyStaffToken(
   return parsed.data;
 }
 
-export function signCandidateToken(
+export async function signCandidateToken(
   session: CandidateSession,
   secret: Uint8Array,
   opts: SignOptions = {}

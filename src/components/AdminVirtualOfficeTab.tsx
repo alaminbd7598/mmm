@@ -294,7 +294,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
   const loadSecureConfig = async (announce: boolean) => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/admin/virtual-office', { headers: { 'X-MMM-Admin': '1' } });
+      const res = await fetch('/api/admin/virtual-office', { credentials: 'same-origin' });
       const data = (await res.json()) as { ok?: boolean; config?: VirtualOfficeConfig };
       if (!res.ok || !data.ok || !data.config) throw new Error('unavailable');
       if (!mountedRef.current) return;
