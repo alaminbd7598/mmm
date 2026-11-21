@@ -1,12 +1,9 @@
+import { loadEnvConfig } from '@next/env';
 import { defineConfig, env } from 'prisma/config';
 
-// Prisma CLI commands (db push, generate) read DATABASE_URL from the environment or, when it is
-// not set there, from a local .env file. Existing environment variables are never overridden.
-try {
-  process.loadEnvFile();
-} catch {
-  // no .env file: use the environment as it is
-}
+// Prisma CLI commands (generate, db push) read DATABASE_URL the way Next.js does: from the
+// environment first, then from .env files. Existing environment variables are never overridden.
+loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
 
 // DATABASE_URL is only required by commands that connect (db push). `prisma generate`
 // (postinstall) must also work on machines without a database, so fall back to a placeholder there.

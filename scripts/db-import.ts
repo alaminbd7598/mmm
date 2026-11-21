@@ -17,6 +17,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { loadEnvConfig } from '@next/env';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { COLLECTION_KEYS, SINGLETON_KEYS, type StateKey } from '../src/server/contracts';
