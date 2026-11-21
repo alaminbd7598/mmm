@@ -1,3 +1,4 @@
+import './lib/zodBrowserConfig';
 import React, { Suspense, lazy, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Home, Info, Mail, RefreshCw, X } from 'lucide-react';
 import { ThemeProvider } from './store/ThemeContext';

@@ -20,8 +20,10 @@
  *     --db-push            run `prisma db push` before starting (database mode only)
  *     --headed             show the browser
  *
- * The seed accounts must still have their initial passwords (ADMIN_BOOTSTRAP_PASSWORD, or the
- * legacy defaults when it is unset), so every database-mode run needs a new empty database.
+ * The spawned server gets DEMO_MODE=1 in demo mode (the sample admin is closed in production
+ * otherwise) and, in database mode, an ADMIN_BOOTSTRAP_PASSWORD (yours, or a random one). The
+ * Super Admin must still have that bootstrap password, so every database-mode run needs a new
+ * empty database. With --base-url, start the server with the same variables yourself.
  * The login rate-limit scenario runs last because it exhausts the per-IP login budget of the
  * server process for 15 minutes. Exit code 0 = all scenarios passed.
  */
@@ -42,9 +44,10 @@ const args = Object.fromEntries(
 const PORT = Number(args.port || 3300);
 const BASE = String(args['base-url'] || `http://localhost:${PORT}`).replace(/\/$/, '');
 const DB_MODE = Boolean(process.env.DATABASE_URL);
-const ADMIN = { username: 'admin', password: process.env.ADMIN_BOOTSTRAP_PASSWORD || 'admin123' };
 const RUN_ID = crypto.randomBytes(3).toString('hex');
 const strongPassword = (prefix) => `${prefix}${crypto.randomBytes(5).toString('hex')}9Q`;
+const BOOTSTRAP_PASSWORD = process.env.ADMIN_BOOTSTRAP_PASSWORD || strongPassword('B00tstrap-');
+const ADMIN = { username: 'admin', password: DB_MODE ? BOOTSTRAP_PASSWORD : 'admin123' };
 
 // ------------------------------------------------------------------------------------------
 // Tiny test harness
@@ -99,7 +102,11 @@ async function waitForServer(url, timeoutMs) {
 function startServer() {
   const child = spawn('npx', ['next', 'start', '-p', String(PORT)], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      ...(DB_MODE ? { ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP_PASSWORD } : { DEMO_MODE: '1' }),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
@@ -126,11 +133,15 @@ function startServer() {
 // Helpers
 // ------------------------------------------------------------------------------------------
 
-/** Collect same-origin console errors, page errors and failed same-origin requests. */
+/** Collect same-origin console errors, page errors, failed same-origin requests and CSP violations. */
 function watchPage(page, sink) {
   page.on('pageerror', (e) => sink.push(`pageerror ${page.url()}: ${e.message}`));
   page.on('console', (m) => {
     if (m.type() !== 'error') return;
+    if (/Content Security Policy/i.test(m.text())) {
+      sink.push(`CSP ${page.url()}: ${m.text().slice(0, 300)}`);
+      return;
+    }
     const loc = m.location() && m.location().url;
     if (loc && !loc.startsWith(BASE)) return; // third-party embeds/fonts (may be offline here)
     sink.push(`console ${page.url()}: ${m.text().slice(0, 200)}`);
@@ -347,7 +358,7 @@ async function main() {
       await openAdminTab(admin, /ইউজার রোল ও RBAC|User Roles & RBAC/);
       await admin.fill('input[placeholder="e.g. Ustadh Mahmudul Hasan"]', `E2E Teacher ${RUN_ID}`);
       await admin.fill('input[placeholder="mahmud"]', teacher.username);
-      await admin.fill('input[placeholder="pass123"]', teacher.password);
+      await admin.fill('input[placeholder="Noor-2027-Uttara"]', teacher.password);
       const form = admin.locator('form', { has: admin.locator('input[placeholder="mahmud"]') });
       await form.locator('select').selectOption('Coordinators / Teachers');
       const synced = waitForApi(admin, '/api/admin/sync');
@@ -469,6 +480,121 @@ async function main() {
       await visitor.getByTestId('career-status-search-btn').click();
       assert((await looked).status() === 200, 'UI status lookup failed');
       await visitor.getByTestId('career-status-results').getByText(entry.id).waitFor({ timeout: 10_000 });
+    });
+
+    await scenario('security headers are sent on pages and API responses', async () => {
+      const api = await apiClient();
+      for (const p of ['/', '/admin', '/api/state/meta']) {
+        const h = (await api.get(p)).headers();
+        assert(h['x-content-type-options'] === 'nosniff', `${p}: nosniff missing`);
+        assert(h['referrer-policy'] === 'strict-origin-when-cross-origin', `${p}: referrer-policy ${h['referrer-policy']}`);
+        assert(h['x-frame-options'] === 'SAMEORIGIN', `${p}: x-frame-options ${h['x-frame-options']}`);
+        assert(/camera=\(\)/.test(h['permissions-policy'] || ''), `${p}: permissions-policy missing`);
+        assert(/max-age=\d+/.test(h['strict-transport-security'] || ''), `${p}: HSTS missing`);
+        assert(/frame-ancestors 'self'/.test(h['content-security-policy'] || ''), `${p}: CSP missing`);
+        assert(!('x-powered-by' in h), `${p}: x-powered-by present`);
+      }
+      await api.dispose();
+    });
+
+    if (DB_MODE) {
+      await scenario('the public default passwords are refused in database mode', async () => {
+        const api = await apiClient();
+        for (const [username, password] of [['chairman', 'chairman123'], ['principal', 'principal123'], ['teacher', 'teacher123'], ['manager', 'manager123']]) {
+          const r = await apiLogin(api, username, password);
+          assert(r.status === 401, `${username} with its old default password returned ${r.status}`);
+        }
+        await api.dispose();
+        const state = await (await admin.request.get(BASE + '/api/state')).json();
+        assert(!(state.state.users || []).some((u) => u.username === 'manager'), 'sample manager account was seeded');
+      });
+    }
+
+    await scenario('links with unsafe schemes are refused by staff sync and public submit', async () => {
+      const state = await (await admin.request.get(BASE + '/api/state')).json();
+      const res = await admin.request.post(BASE + '/api/admin/sync', {
+        data: {
+          baseVersion: state.version,
+          ops: [
+            { op: 'upsert', key: 'notices', item: { id: `n-e2e-js-${RUN_ID}`, title: 'x', attachmentUrl: 'javascript:alert(1)' } },
+            { op: 'upsert', key: 'departmentVideos', item: { id: `v-e2e-data-${RUN_ID}`, videoUrl: 'data:text/html,<script>1</script>' } },
+            { op: 'upsert', key: 'departmentVideos', item: { id: `v-e2e-file-${RUN_ID}`, videoUrl: 'file:///etc/passwd' } },
+          ],
+        },
+      });
+      const body = await res.json();
+      assert(res.status() === 400 && body.rejected && body.rejected.length === 3, `sync ${res.status()} ${JSON.stringify(body).slice(0, 300)}`);
+      const job = (state.state.careerJobs || []).find((j) => j.active);
+      const api = await apiClient();
+      const submit = await api.post('/api/public/submit', {
+        data: {
+          items: [{ key: 'careerApplications', item: { jobId: job.id, applicantName: 'Link Test', phone: '01911000000', email: `link.${RUN_ID}@example.test`, educationBn: 'BA', cvLinkOrFileName: 'javascript:alert(1)' } }],
+        },
+      });
+      await api.dispose();
+      assert(submit.status() === 400, `public submit with a script link returned ${submit.status()}`);
+    });
+
+    await scenario('a candidate account does not expose guest applications sent with the same email', async () => {
+      const email = `e2e.${RUN_ID}@example.test`; // the guest application above used this address
+      const api = await apiClient();
+      const reg = await api.post('/api/public/career/register', {
+        data: { fullName: 'Someone Else', email, phone: '01811000000', password: strongPassword('Cand1date-') },
+      });
+      assert(reg.status() === 200, `register returned ${reg.status()}`);
+      const me = await (await api.get('/api/public/career/me')).json();
+      assert(me.candidate && me.candidate.email === email, 'candidate session missing');
+      assert(me.applications.length === 0, `account sees ${me.applications.length} guest application(s)`);
+      const cookies = (await api.storageState()).cookies;
+      await api.post('/api/public/career/logout');
+      await api.dispose();
+      // The copied candidate token is void after logout.
+      const replay = await pwRequest.newContext({ baseURL: BASE, storageState: { cookies, origins: [] } });
+      const again = await (await replay.get('/api/public/career/me')).json();
+      await replay.dispose();
+      assert(again.candidate === null, 'candidate token still valid after logout');
+    });
+
+    await scenario('a spoofed X-Forwarded-For prefix does not bypass the per-client rate limit', async () => {
+      const api = await apiClient();
+      const statuses = [];
+      for (let i = 0; i < 13; i++) {
+        const r = await api.post('/api/public/admission-token/match', {
+          headers: { 'X-Forwarded-For': `203.0.113.${i}, 198.51.100.${parseInt(RUN_ID.slice(0, 2), 16)}` },
+          data: { phone: '01700000000' },
+        });
+        statuses.push(r.status());
+      }
+      await api.dispose();
+      assert(statuses.filter((s) => s !== 429).length === 10 && statuses[12] === 429, `statuses ${statuses.join(',')}`);
+    });
+
+    await scenario('a copied staff token is void after password reset and after logout', async () => {
+      const api = await apiClient();
+      const login = await apiLogin(api, teacher.username, teacher.newPassword, 'Coordinators / Teachers');
+      assert(login.status === 200, `teacher login ${login.status}`);
+      const cookies = (await api.storageState()).cookies;
+      const copy = () => pwRequest.newContext({ baseURL: BASE, storageState: { cookies, origins: [] } });
+      const before = await copy();
+      assert((await before.get('/api/auth/me')).status() === 200, 'copied token not valid before logout');
+      await before.dispose();
+      await api.post('/api/auth/logout');
+      await api.dispose();
+      const after = await copy();
+      assert((await after.get('/api/auth/me')).status() === 401, 'copied token still valid after logout');
+      await after.dispose();
+
+      // Admin resets the password: sessions opened with the old one stop working.
+      const api2 = await apiClient();
+      assert((await apiLogin(api2, teacher.username, teacher.newPassword)).status === 200, 'teacher re-login failed');
+      const state = await (await admin.request.get(BASE + '/api/state')).json();
+      const record = (state.state.users || []).find((u) => u.username === teacher.username);
+      const reset = await admin.request.post(BASE + '/api/admin/sync', {
+        data: { baseVersion: state.version, ops: [{ op: 'upsert', key: 'users', item: { ...record, password: strongPassword('Res3t-') } }] },
+      });
+      assert(reset.status() === 200, `reset returned ${reset.status()}`);
+      assert((await api2.get('/api/auth/me')).status() === 401, 'session survived an admin password reset');
+      await api2.dispose();
     });
 
     await scenario('logout clears staff data', async () => {

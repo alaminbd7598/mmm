@@ -6,7 +6,11 @@ Trilingual (বাংলা / English / العربية) public website and admin
 - **Database mode** (`DATABASE_URL` set): all content, admissions leads, tokens, leave requests,
   career applications etc. are stored in MySQL/MariaDB.
 - **Demo mode** (no `DATABASE_URL`): runs with built-in seed content in memory; nothing is saved.
-  Useful for previews (Vercel, Google AI Studio).
+  Useful for previews (Vercel, Google AI Studio). On a production server the admin panel of the
+  demo stays closed unless `DEMO_MODE=1` is set (its sample passwords are public).
+
+First sign-in on a real database: set `ADMIN_BOOTSTRAP_PASSWORD`, restart, sign in as `admin` and
+choose a new password (details in the deployment guide).
 
 ## Quick start
 

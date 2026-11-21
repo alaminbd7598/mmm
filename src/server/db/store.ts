@@ -36,6 +36,9 @@ function createStore(): DataStore {
       }
     );
   }
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[setup] DATABASE_URL is not set: running in Demo Mode. Nothing is saved permanently.');
+  }
   return new MemoryStore(() => buildSeedPlan('demo'));
 }
 

@@ -52,16 +52,44 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
 - Staff: `POST /api/auth/login` checks bcrypt (`bcryptjs`, cost 12) hashes, then sets an HttpOnly,
   `Secure` (in production), `SameSite=Lax` cookie `mmm_session` holding a `jose` HS256 JWT
   (8 h, payload = `StaffSession`). Secret: `JWT_SECRET` (≥ 32 chars). In `database` mode without
-  `JWT_SECRET` login fails with `NOT_CONFIGURED`; in `demo` mode a fixed demo secret is used.
-- Passwords are never sent to browsers. Seeded/imported users get `mustChangePassword = true`;
-  the client forces a password change after login. Initial passwords: `ADMIN_BOOTSTRAP_PASSWORD`
-  if set, otherwise each seed user's legacy default.
+  `JWT_SECRET` login fails with `NOT_CONFIGURED`; in `demo` mode without it a random per-process
+  key is used. In production the demo admin is closed unless `DEMO_MODE=1`.
+- Every request re-checks the stored account: it must exist, be enabled and carry the same
+  `sessionVersion` as the token. Logout, password change and an admin password reset raise the
+  version, which voids all earlier tokens (same for career candidates).
+- Passwords are never sent to browsers and no account is seeded with one in `database` mode
+  (seeded accounts: `admin` plus the three certificate signatories). On start, when no Super Admin
+  has a password, the first one receives `ADMIN_BOOTSTRAP_PASSWORD` (≥ 12 chars, password policy)
+  with `mustChangePassword = true`; otherwise login returns `NOT_CONFIGURED` and `GET /api/state`
+  carries `loginSetup`, which the login page turns into setup instructions. Passwords set by an
+  administrator (new accounts, resets) must also be changed at first sign-in.
+- Password policy (`validateNewPassword`): ≥ 10 chars, letters and digits, not containing the
+  username, not on the denylist (legacy defaults and common passwords).
 - `src/proxy.ts` (Next.js 16 replacement for `middleware.ts`) rejects requests to `/api/admin/*`
   without a valid staff session (401). Route handlers re-check the session and RBAC themselves.
 - Google sign-in no longer creates accounts or sessions (the client cannot prove the Google
   identity to the server without Firebase Admin). The button reports that it is unavailable.
 - Career candidates: separate cookie `mmm_candidate` (`CandidateSession`), bcrypt passwords.
 - CSRF: SameSite=Lax cookies + `assertSameOrigin` on every state-changing route.
+
+## Abuse limits and hardening
+
+- `src/server/rate-limit.ts`: in-memory fixed-window counters (per process, capped map). The client
+  address is the entry `TRUSTED_PROXY_HOPS` (default 1) from the right of `X-Forwarded-For`; on
+  Vercel `x-vercel-forwarded-for`. Client-supplied left-hand entries are never used; requests
+  without a trustworthy address share one larger bucket per limit. Login also locks per username.
+- Anonymous submissions: zod field whitelists, per-item file size, 6 MB body, per-address and
+  site-wide daily caps for submissions and uploaded bytes, ceiling on stored inline files.
+- Stored content rules (`src/utils/safeUrl.ts`, `src/server/state/document-rules.ts`): URL fields
+  accept http(s), mailto, tel and same-site values; inline data only as raster images (never in
+  link or embed fields) or PDF/Word in file fields; iframes only from the embed host allowlist.
+- RBAC: `RESOURCES_FOR_KEY` + the stored matrix; `replace` (restore, reset, rollback) needs view,
+  create, update and delete on the key; `users` and `rbacMatrix` are Super Admin only; the server
+  keeps one holder per signatory slot.
+- `getSnapshot()` is cached per state version and frozen; the public projection is cached per
+  snapshot; `/api/state/meta` is one primary-key query.
+- Security headers (CSP, HSTS, nosniff, Referrer-Policy, X-Frame-Options, Permissions-Policy) are
+  set in `next.config.mjs`.
 
 ## API route handlers (`src/app/api/**/route.ts`)
 
@@ -105,5 +133,7 @@ calling `setState`. The persistence layer changes:
 ## Environment variables
 
 `DATABASE_URL`, `JWT_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-4-hydrogen`),
-`NEXT_PUBLIC_APP_URL`, `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (optional),
+`NEXT_PUBLIC_APP_URL`, `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (first sign-in),
+`TRUSTED_PROXY_HOPS` (optional, default 1), `DEMO_MODE=1` (demo admin in production),
+`CHAT_DAILY_LIMIT` (optional, default 3000),
 `NEXT_OUTPUT=standalone` (Docker only).

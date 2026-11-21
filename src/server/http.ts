@@ -1,7 +1,7 @@
 import 'server-only';
 import { NextResponse } from 'next/server';
 import { StoreConflictError, StoreNotFoundError, StoreUnavailableError } from './db/errors';
-import { clientIp, rateLimitClient } from './rate-limit';
+import { UNKNOWN_CLIENT, clientIp, rateLimitClient } from './rate-limit';
 
 /** JSON response helper with no-store caching (API data is per-request and may be personal). */
 export function json<T>(body: T, init?: number | ResponseInit): NextResponse {
@@ -69,11 +69,28 @@ export function handleError(err: unknown): NextResponse {
   return jsonError(500, 'Internal server error.', 'INTERNAL');
 }
 
-export { clientIp, rateLimit } from './rate-limit';
+export { rateLimit } from './rate-limit';
+
+let warnedUnknownClient = false;
+
+/**
+ * Client address for rate limiting. Logs once when the hosting proxy sends no usable
+ * X-Forwarded-For, because all visitors then share one (larger) bucket per limit.
+ */
+export function clientAddress(req: Request): string {
+  const ip = clientIp(req);
+  if (ip === UNKNOWN_CLIENT && !warnedUnknownClient && process.env.NODE_ENV === 'production') {
+    warnedUnknownClient = true;
+    console.warn(
+      '[rate-limit] No client address from the proxy (X-Forwarded-For); rate limits are shared by all visitors. Check TRUSTED_PROXY_HOPS.'
+    );
+  }
+  return ip;
+}
 
 /** Per-client limiter; requests without a trustworthy address share one (larger) bucket per scope. */
 export function assertRateLimit(req: Request, scope: string, limit: number, windowMs: number): void {
-  if (!rateLimitClient(scope, clientIp(req), limit, windowMs)) {
+  if (!rateLimitClient(scope, clientAddress(req), limit, windowMs)) {
     throw new HttpError(429, 'Too many requests. Please try again shortly.', 'RATE_LIMITED');
   }
 }
