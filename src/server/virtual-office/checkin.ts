@@ -13,6 +13,7 @@ import {
   resolveDeskJoinDetails,
   type VirtualOfficeCheckinInput,
 } from '../../utils/virtualOfficeLogic';
+import { findLeadMatches } from '../state/public-submit';
 
 export const MAX_VIRTUAL_OFFICE_SESSIONS = 200;
 
@@ -46,14 +47,21 @@ export interface CheckinPlan {
   isLive: boolean;
   session: VirtualOfficeSession;
   lead: AdmissionLead;
+  /** False when `lead` is a stored lead (same visitor checking in again) with a note appended. */
+  leadIsNew: boolean;
   join: ReturnType<typeof resolveDeskJoinDetails>;
+  dutyOfficerPhone: string;
 }
 
-/** Session + CRM lead for a validated check-in (same records the legacy server created). */
+/**
+ * Session + CRM lead for a validated check-in. A visitor who already has a lead (same phone and
+ * same name, the rule used for website submissions) gets a note on that lead instead of a new one.
+ */
 export function planVirtualOfficeCheckin(
   input: VirtualOfficeCheckinInput,
   config: VirtualOfficeConfig,
-  now: Date
+  now: Date,
+  existingLeads: readonly AdmissionLead[] = []
 ): CheckinPlan {
   const mode = evaluateVirtualOfficeLiveStatus(config, now);
   const join = resolveDeskJoinDetails(config, input.deskId);
@@ -77,6 +85,22 @@ export function planVirtualOfficeCheckin(
   };
 
   const callback = input.preferredCallbackTime ? ` · Callback: ${input.preferredCallbackTime}` : '';
+  const submittedAt = formatSubmittedAt(now, config.timezone || 'Asia/Dhaka');
+  const summary = `[Virtual Office ${isLive ? 'Live Join' : 'Callback Request'}] ${input.topic || join.deskNameEn}${callback}`;
+  const dutyOfficerPhone = config.dutyOfficerPhone || DEFAULT_VIRTUAL_OFFICE_CONFIG.dutyOfficerPhone;
+
+  const known = findLeadMatches(existingLeads, input.phone, { name: input.fullName }).sameStudent;
+  if (known) {
+    const lead: AdmissionLead = {
+      ...known,
+      notes: [
+        ...(known.notes || []),
+        { id: `note-vo-${ms}-${suffix}`, authorName: 'Virtual Office', timestamp: submittedAt, text: `${summary} — ${join.deskNameBn}` },
+      ],
+    };
+    return { mode, isLive, session, lead, leadIsNew: false, join, dutyOfficerPhone };
+  }
+
   const lead: AdmissionLead = {
     id: `lead-vo-${ms}-${suffix}`,
     name: input.fullName,
@@ -84,15 +108,15 @@ export function planVirtualOfficeCheckin(
     email: input.email,
     courseId: 'virtual-office',
     courseTitle: `Virtual Office — ${join.deskNameBn}`,
-    message: `[Virtual Office ${isLive ? 'Live Join' : 'Callback Request'}] ${input.topic || join.deskNameEn}${callback}`,
+    message: summary,
     status: 'New',
-    submittedAt: formatSubmittedAt(now, config.timezone || 'Asia/Dhaka'),
+    submittedAt,
     source: 'Quick Inquiry',
     priority: 'Hot',
     marketingSourceTag: 'Virtual Office Desk',
   };
 
-  return { mode, isLive, session, lead, join };
+  return { mode, isLive, session, lead, leadIsNew: true, join, dutyOfficerPhone };
 }
 
 const asItem = <T extends { id: string }>(v: T) => v as unknown as { id: string } & Record<string, unknown>;
@@ -108,7 +132,7 @@ export function checkinOps(plan: CheckinPlan, existingSessionIds: readonly strin
     { op: 'order', key: 'virtualOfficeSessions', ids: [plan.session.id] },
     ...overflow.map((id): SyncOp => ({ op: 'delete', key: 'virtualOfficeSessions', id })),
     { op: 'upsert', key: 'leads', item: asItem(plan.lead) },
-    { op: 'order', key: 'leads', ids: [plan.lead.id] },
+    ...(plan.leadIsNew ? [{ op: 'order', key: 'leads', ids: [plan.lead.id] } satisfies SyncOp] : []),
   ];
 }
 
@@ -120,9 +144,11 @@ export type CheckinResponse =
       status: VirtualOfficeStatusMode;
       session: VirtualOfficeSession;
       join: {
+        deskMode: VirtualOfficeSession['deskMode'];
         deskNameBn: string;
         deskNameEn: string;
         officerNameBn: string;
+        dutyOfficerPhone: string;
         platform: CheckinPlan['join']['platform'];
         roomUrl: string;
         zoomMeetingId?: string;
@@ -151,9 +177,11 @@ export function checkinResponse(plan: CheckinPlan): CheckinResponse {
     status: plan.mode,
     session: plan.session,
     join: {
+      deskMode: plan.session.deskMode,
       deskNameBn: j.deskNameBn,
       deskNameEn: j.deskNameEn,
       officerNameBn: j.officerNameBn,
+      dutyOfficerPhone: plan.dutyOfficerPhone,
       platform: j.platform,
       roomUrl: j.roomUrl,
       zoomMeetingId: j.zoomMeetingId,

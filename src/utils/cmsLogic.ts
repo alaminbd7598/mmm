@@ -26,6 +26,7 @@ import {
   TeacherLeaveRequest,
 } from '../types/cms';
 import { resolveVersionManagerConfig } from './versionLogic';
+import { isAllowedEmbedUrl, isSafeMediaUrl } from './safeUrl';
 
 export type AdminTabId =
   | 'overview'
@@ -1687,12 +1688,27 @@ export function validateInquiryInput(
  * Converts any YouTube (watch, embed, shorts, youtu.be) OR Facebook (reel, watch, share/v, share/r, video)
  * URL into a clean, auto-playing embeddable URL with vertical/horizontal orientation detection.
  */
-export function getYouTubeEmbedUrl(rawUrl: string): {
+export function getYouTubeEmbedUrl(rawUrl: string): ParsedVideoUrl {
+  const parsed = parseVideoUrl(rawUrl);
+  if (!parsed.embedUrl) return parsed;
+  // Only the known embed providers may be framed; direct media files must be http(s) or same-site.
+  const playable =
+    parsed.platform === 'direct' && DIRECT_VIDEO_FILE_RE.test(parsed.embedUrl)
+      ? isSafeMediaUrl(parsed.embedUrl)
+      : isAllowedEmbedUrl(parsed.embedUrl);
+  return playable ? parsed : { embedUrl: '', videoId: null, isVerticalShort: false, platform: 'direct' };
+}
+
+export const DIRECT_VIDEO_FILE_RE = /\.(mp4|webm|ogg)(\?|$)/i;
+
+interface ParsedVideoUrl {
   embedUrl: string;
   videoId: string | null;
   isVerticalShort: boolean;
   platform: 'youtube' | 'facebook' | 'direct';
-} {
+}
+
+function parseVideoUrl(rawUrl: string): ParsedVideoUrl {
   const trimmed = (rawUrl || '').trim();
   if (!trimmed) {
     return { embedUrl: '', videoId: null, isVerticalShort: false, platform: 'direct' };

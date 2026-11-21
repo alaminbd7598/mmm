@@ -39,6 +39,7 @@ const session = (u: AdminUser): StaffSession => ({
   username: u.username,
   role: u.role,
   mustChangePassword: false,
+  sv: 0,
 });
 
 const asItem = (u: AdminUser) => u as unknown as { id: string } & Record<string, unknown>;
@@ -163,7 +164,7 @@ test('a Super Admin may demote or delete another Super Admin only while one rema
 test('the requester is the only active Super Admin: demoting the other remaining one is impossible', () => {
   // sa2 is the only Super Admin; requester "sa" is a Super Admin with a stale session after being demoted
   const s = state([user('sa', 'Content Managers'), user('sa2', 'Super Admin')]);
-  const stale: StaffSession = { kind: 'staff', userId: 'sa', username: 'sa', role: 'Super Admin', mustChangePassword: false };
+  const stale: StaffSession = { kind: 'staff', userId: 'sa', username: 'sa', role: 'Super Admin', mustChangePassword: false, sv: 0 };
   const r = authoriseOps([{ op: 'delete', key: 'users', id: 'sa2' }], stale, s);
   assert.match(r.rejected[0].reason, /last Super Admin/);
 });

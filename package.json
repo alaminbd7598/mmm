@@ -5,21 +5,26 @@
   "version": "2.2.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node --env-file-if-exists=.env scripts/prepare-db.mjs && next build",
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/*.test.ts src/server/**/*.test.ts",
+    "test": "tsx --test src/utils/*.test.ts src/store/sync/*.test.ts src/server/**/*.test.ts",
+    "test:e2e": "node scripts/e2e/run.cjs",
     "db:push": "prisma db push",
-    "db:import": "tsx scripts/db-import.ts"
+    "db:import": "tsx --env-file-if-exists=.env scripts/db-import.ts"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",
     "@prisma/adapter-mariadb": "7.10.1",
     "@prisma/client": "7.10.1",
     "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22.14.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "bcryptjs": "3.0.3",
-    "firebase": "^13.4.0",
+    "firebase": "12.19.0",
     "jose": "6.2.18",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
@@ -33,17 +38,12 @@
     "recharts": "^3.10.1",
     "server-only": "^0.0.1",
     "tailwindcss": "^4.3.3",
-    "three": "^0.186.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/qrcode": "^1.5.6",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@types/three": "^0.186.0",
-    "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
+    "playwright": "1.63.0"
   },
   "engines": {
     "node": ">=22.18.0"

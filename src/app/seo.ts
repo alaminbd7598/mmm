@@ -35,14 +35,37 @@ export const PUBLIC_PAGES: Record<string, { bn: string; en: string }> = {
   '/contact': { bn: 'যোগাযোগ', en: 'Contact' },
 };
 
-export function siteUrl(): URL | undefined {
-  const raw = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+const withScheme = (value: string): string => (/^https?:\/\//i.test(value) ? value : `https://${value}`);
+
+/**
+ * Canonical origin of the site: NEXT_PUBLIC_APP_URL (or APP_URL), else the Vercel production /
+ * deployment domain when running on Vercel. Undefined when nothing is configured.
+ */
+export function siteUrl(env: Readonly<Record<string, string | undefined>> = process.env): URL | undefined {
+  const raw =
+    env.NEXT_PUBLIC_APP_URL?.trim() ||
+    env.APP_URL?.trim() ||
+    env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
+    env.VERCEL_URL?.trim();
   if (!raw) return undefined;
   try {
-    return new URL(raw);
+    return new URL(withScheme(raw));
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Origin for absolute URLs built per request (sitemap, robots): the configured site URL, else the
+ * host the request arrived on (as forwarded by the hosting proxy).
+ */
+export function requestOrigin(headers: { get(name: string): string | null }): string {
+  const configured = siteUrl();
+  if (configured) return configured.origin;
+  const host = (headers.get('x-forwarded-host') || headers.get('host') || '').split(',')[0].trim();
+  if (!/^[a-z0-9.-]+(:\d+)?$/i.test(host)) return '';
+  const proto = (headers.get('x-forwarded-proto') || '').split(',')[0].trim() === 'http' || /^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? 'http' : 'https';
+  return `${proto}://${host}`;
 }
 
 export function metadataForPath(path: string): Metadata {

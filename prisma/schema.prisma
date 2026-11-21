@@ -23,6 +23,8 @@ model SiteMeta {
 model SiteSetting {
   key       String   @id
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   updatedAt DateTime @updatedAt
 }
 
@@ -30,10 +32,13 @@ model User {
   id                 String   @id
   position           Int
   data               String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version            Int      @default(0)
   username           String   @unique
   role               String
   passwordHash       String?
   mustChangePassword Boolean  @default(false)
+  sessionVersion     Int      @default(0)
   disabled           Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -46,6 +51,8 @@ model Notice {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -56,6 +63,8 @@ model NewsItem {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -66,6 +75,8 @@ model Course {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -76,6 +87,8 @@ model Event {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -86,6 +99,8 @@ model BlogPost {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   slug      String?
   status    String?
   createdAt DateTime @default(now())
@@ -101,6 +116,8 @@ model GalleryItem {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -112,6 +129,8 @@ model AdmissionLead {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   status    String?
   phone     String?
   createdAt DateTime @default(now())
@@ -127,6 +146,8 @@ model AdmissionToken {
   id            String   @id
   position      Int
   data          String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version       Int      @default(0)
   tokenCode     String?  @unique
   guardianPhone String?
   createdAt     DateTime @default(now())
@@ -141,6 +162,8 @@ model TeacherLeave {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   status    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -153,6 +176,8 @@ model CareerJob {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -163,6 +188,8 @@ model CareerApplication {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   email     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -172,13 +199,16 @@ model CareerApplication {
 }
 
 model CareerCandidate {
-  id           String   @id
-  position     Int
-  data         String   @db.LongText
-  email        String?  @unique
-  passwordHash String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id
+  position       Int
+  data           String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version        Int      @default(0)
+  email          String?  @unique
+  passwordHash   String?
+  sessionVersion Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([position])
 }
@@ -187,6 +217,8 @@ model Complaint {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -197,6 +229,8 @@ model CalendarEvent {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -207,6 +241,8 @@ model VirtualOfficeSession {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -218,6 +254,8 @@ model EmailLog {
   id        String   @id
   position  Int
   data      String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -230,6 +268,8 @@ model CollectionItem {
   id         String
   position   Int
   data       String   @db.LongText
+  /// State version (SiteMeta.version) of the last write to this row; used for conflict detection.
+  version    Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

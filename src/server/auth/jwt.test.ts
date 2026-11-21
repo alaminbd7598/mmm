@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CandidateSession, StaffSession } from '../contracts';
 import {
-  DEMO_JWT_SECRET,
+  demoAdminEnabled,
+  demoJwtSecret,
   STAFF_SESSION_TTL_SECONDS,
   modeFromEnv,
   resolveJwtSecret,
@@ -20,8 +21,9 @@ const staff: StaffSession = {
   username: 'admin',
   role: 'Super Admin',
   mustChangePassword: true,
+  sv: 3,
 };
-const candidate: CandidateSession = { kind: 'candidate', candidateId: 'c1', email: 'a@example.com' };
+const candidate: CandidateSession = { kind: 'candidate', candidateId: 'c1', email: 'a@example.com', sv: 0 };
 
 test('staff token round trip', async () => {
   const token = await signStaffToken(staff, secret);
@@ -83,7 +85,8 @@ test('resolveJwtSecret requires a long JWT_SECRET in database mode', () => {
 test('resolveJwtSecret falls back to the demo secret only in demo mode', () => {
   const r = resolveJwtSecret('demo', {});
   assert.ok(r.ok);
-  assert.equal(new TextDecoder().decode(r.secret), DEMO_JWT_SECRET);
+  assert.equal(r.secret, demoJwtSecret(), 'demo mode uses the per-process random key');
+  assert.ok(r.secret.byteLength >= 32);
   const configured = resolveJwtSecret('demo', { JWT_SECRET: 'k'.repeat(40) });
   assert.ok(configured.ok);
   assert.equal(new TextDecoder().decode(configured.secret), 'k'.repeat(40));
@@ -93,4 +96,25 @@ test('modeFromEnv follows DATABASE_URL', () => {
   assert.equal(modeFromEnv({}), 'demo');
   assert.equal(modeFromEnv({ DATABASE_URL: '  ' }), 'demo');
   assert.equal(modeFromEnv({ DATABASE_URL: 'mysql://u:p@h/db' }), 'database');
+});
+
+test('a token without a session version is rejected', async () => {
+  const { SignJWT } = await import('jose');
+  const iat = Math.floor(Date.now() / 1000);
+  const legacy = await new SignJWT({ kind: 'staff', userId: 'u1', username: 'admin', role: 'Super Admin', mustChangePassword: false })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer('mmm')
+    .setAudience('mmm:staff')
+    .setSubject('u1')
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + 600)
+    .sign(secret);
+  assert.equal(await verifyStaffToken(legacy, secret), null);
+});
+
+test('the demo admin is closed in production unless DEMO_MODE=1', () => {
+  assert.equal(demoAdminEnabled({ NODE_ENV: 'production' }), false);
+  assert.equal(demoAdminEnabled({ NODE_ENV: 'production', DEMO_MODE: '1' }), true);
+  assert.equal(demoAdminEnabled({ NODE_ENV: 'development' }), true);
+  assert.equal(demoAdminEnabled({}), true);
 });

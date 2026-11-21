@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MIN_PASSWORD_LENGTH } from '../contracts';
-import { LEGACY_DEFAULT_PASSWORDS, hashPassword, validateNewPassword, verifyPassword } from './password';
+import { BLOCKED_PASSWORDS, hashPassword, validateNewPassword, verifyPassword } from './password';
 
 test('validateNewPassword accepts a strong password', () => {
   assert.deepEqual(validateNewPassword('Madrasah2027', 'admin'), { ok: true });
@@ -27,15 +27,20 @@ test('validateNewPassword requires letters and digits', () => {
 });
 
 test('validateNewPassword rejects the username (case-insensitive)', () => {
-  assert.equal(validateNewPassword('Teacher01', 'teacher01').code, 'SAME_AS_USERNAME');
+  assert.equal(validateNewPassword('Teacher0123', 'teacher0123').code, 'SAME_AS_USERNAME');
+  assert.equal(validateNewPassword('xx-Mahmud-2027', 'mahmud').code, 'CONTAINS_USERNAME');
+  assert.equal(validateNewPassword('Kamal.Hossain77', 'kamal@example.com').code, 'CONTAINS_USERNAME');
+  // Very short usernames are not searched for inside the password.
+  assert.equal(validateNewPassword('Saba-Ridge-2027', 'sa').ok, true);
 });
 
 test('validateNewPassword rejects every legacy default', () => {
-  for (const pw of LEGACY_DEFAULT_PASSWORDS) {
+  for (const pw of BLOCKED_PASSWORDS) {
     assert.equal(validateNewPassword(pw).ok, false, pw);
   }
-  assert.equal(validateNewPassword('ADMIN123').code, 'TOO_COMMON');
-  assert.equal(validateNewPassword('principal123').code, 'TOO_COMMON');
+  assert.equal(validateNewPassword('PRINCIPAL123').code, 'TOO_COMMON');
+  assert.equal(validateNewPassword('Password123').code, 'TOO_COMMON');
+  assert.equal(validateNewPassword('password1').code, 'TOO_SHORT');
 });
 
 test('hashPassword / verifyPassword round trip', async () => {

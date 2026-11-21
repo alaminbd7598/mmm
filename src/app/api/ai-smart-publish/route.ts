@@ -1,5 +1,5 @@
 import { classifyContentDeterministically } from '@/src/utils/admissionToken2027Logic';
-import { getStore } from '@/src/server/db/store';
+import { getStore, storageMode } from '@/src/server/db/store';
 import { requireStaffPermission } from '@/src/server/auth/session';
 import { HttpError, assertSameOrigin, handleError, json, rateLimit, readJson } from '@/src/server/http';
 import { getGenAI, getGeminiModel } from '@/src/server/ai/gemini';
@@ -36,7 +36,8 @@ export async function POST(req: Request) {
     const huffazCount = Array.isArray(state.hifzTreeConfig?.graduates) ? state.hifzTreeConfig.graduates.length : 30;
     const fallback = classifyContentDeterministically(input.rawText, input.sourceUrl, huffazCount);
 
-    const ai = getGenAI();
+    // Demo servers use public sample sign-ins, so they never spend the Gemini key on staff tools.
+    const ai = storageMode() === 'demo' ? null : getGenAI();
     if (!ai) return json({ ok: true, mode: 'deterministic', suggestion: fallback });
 
     try {

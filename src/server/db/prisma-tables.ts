@@ -13,8 +13,10 @@ export interface CollectionRow {
   id: string;
   position: number;
   data: string;
+  version?: number;
   passwordHash?: string | null;
   mustChangePassword?: boolean;
+  sessionVersion?: number;
 }
 
 type Where = Record<string, unknown>;

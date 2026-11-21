@@ -8,8 +8,8 @@ import type { DataStore, StorageMode } from '../contracts';
 import { MemoryStore } from './memory-store';
 import { createPrismaClient } from './prisma-client';
 import { PrismaStore } from './prisma-store';
-import { buildSeedPlan } from './seed';
-
+import { modeFromEnv } from '../auth/jwt';
+import { buildSeedPlan, ensureBootstrapPassword } from './seed';
 
 interface StoreHolder {
   store?: DataStore;
@@ -21,12 +21,20 @@ const holder: StoreHolder = ((globalThis as Record<symbol, unknown>)[GLOBAL_KEY]
   ((globalThis as Record<symbol, unknown>)[GLOBAL_KEY] = {} as StoreHolder);
 
 export function storageMode(): StorageMode {
-  return process.env.DATABASE_URL ? 'database' : 'demo';
+  return modeFromEnv();
 }
 
 function createStore(): DataStore {
-  const url = process.env.DATABASE_URL;
-  if (url) return new PrismaStore(createPrismaClient(url), () => buildSeedPlan('database'));
+  const url = process.env.DATABASE_URL?.trim();
+  if (url) {
+    return new PrismaStore(
+      createPrismaClient(url),
+      () => buildSeedPlan('database'),
+      async (store) => {
+        await ensureBootstrapPassword(store);
+      }
+    );
+  }
   return new MemoryStore(() => buildSeedPlan('demo'));
 }
 

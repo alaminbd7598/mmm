@@ -15,11 +15,17 @@ export const STAFF_SESSION_TTL_SECONDS = 8 * 60 * 60;
 export const CANDIDATE_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const MIN_JWT_SECRET_LENGTH = 32;
 
+const DEMO_SECRET_KEY = Symbol.for('mmm.demoJwtSecret');
+
 /**
- * Used only in demo mode (no DATABASE_URL) when JWT_SECRET is not set. Demo data is an in-memory
- * copy of public seed content, so a publicly known signing key is acceptable there.
+ * Signing key for demo mode (no DATABASE_URL) when JWT_SECRET is not set: random per server
+ * process, so demo sessions cannot be forged and end when the process restarts.
  */
-export const DEMO_JWT_SECRET = 'mmm-demo-mode-jwt-secret-not-for-production-use-0001';
+export function demoJwtSecret(): Uint8Array {
+  const holder = globalThis as Record<symbol, unknown>;
+  holder[DEMO_SECRET_KEY] ??= crypto.getRandomValues(new Uint8Array(48));
+  return holder[DEMO_SECRET_KEY] as Uint8Array;
+}
 
 export type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -33,15 +39,29 @@ export function modeFromEnv(env: EnvLike = process.env): StorageMode {
 }
 
 /**
+ * Whether staff sign-in is available in demo mode. The sample accounts have public passwords, so
+ * a production server without DATABASE_URL (e.g. a mistyped variable on a live domain) keeps the
+ * admin panel closed unless DEMO_MODE=1 states that a writable demo is intended.
+ */
+export function demoAdminEnabled(env: EnvLike = process.env): boolean {
+  return env.NODE_ENV !== 'production' || env.DEMO_MODE === '1';
+}
+
+/** True when a valid JWT_SECRET is configured (demo mode otherwise uses a per-process key). */
+export function hasConfiguredJwtSecret(env: EnvLike = process.env): boolean {
+  return (env.JWT_SECRET?.trim() || '').length >= MIN_JWT_SECRET_LENGTH;
+}
+
+/**
  * Resolve the signing key. Database mode requires JWT_SECRET (>= 32 chars). Demo mode prefers a
- * valid JWT_SECRET and otherwise falls back to DEMO_JWT_SECRET.
+ * valid JWT_SECRET and otherwise uses the per-process demo key.
  */
 export function resolveJwtSecret(mode: StorageMode, env: EnvLike = process.env): JwtSecretResult {
   const configured = env.JWT_SECRET?.trim() || '';
   if (configured.length >= MIN_JWT_SECRET_LENGTH) {
     return { ok: true, secret: new TextEncoder().encode(configured) };
   }
-  if (mode === 'demo') return { ok: true, secret: new TextEncoder().encode(DEMO_JWT_SECRET) };
+  if (mode === 'demo') return { ok: true, secret: demoJwtSecret() };
   return {
     ok: false,
     error: `JWT_SECRET must be set to at least ${MIN_JWT_SECRET_LENGTH} characters when DATABASE_URL is configured.`,
@@ -54,12 +74,14 @@ const staffClaimsSchema = z.object({
   username: z.string().min(1),
   role: z.enum(ADMIN_ROLES_LIST as [StaffSession['role'], ...StaffSession['role'][]]),
   mustChangePassword: z.boolean(),
+  sv: z.number().int().nonnegative(),
 });
 
 const candidateClaimsSchema = z.object({
   kind: z.literal('candidate'),
   candidateId: z.string().min(1),
   email: z.string().min(1),
+  sv: z.number().int().nonnegative(),
 });
 
 interface SignOptions {

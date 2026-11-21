@@ -129,7 +129,7 @@ test('career applications bind to the candidate session and refuse closed jobs',
   const signedIn = planPublicSubmit(
     items([{ key: 'careerApplications', item: app }]),
     state(),
-    ctx({ kind: 'candidate', candidateId: 'cand-1', email: 'me@x.test' })
+    ctx({ kind: 'candidate', candidateId: 'cand-1', email: 'me@x.test', sv: 0 })
   );
   assert.ok(signedIn.ok);
   if (signedIn.ok) {

@@ -3,13 +3,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CMSState } from '../../types/cms';
 import { INITIAL_CMS_STATE } from '../../data/seedData';
-import { PRIVATE_KEYS, isCollectionKey } from '../contracts';
+import { PRIVATE_KEYS, isCollectionKey } from '../../server/contracts';
 import {
   buildClientFallbackState,
   hasSecrets,
   stripConfirmedSecrets,
   stripSecrets,
-} from '../../store/sync/state-shape';
+} from './state-shape';
 
 test('client fallback state carries no accounts or personal collections', () => {
   const fallback = buildClientFallbackState();

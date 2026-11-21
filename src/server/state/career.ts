@@ -21,13 +21,15 @@ export function findCandidate(state: CMSState, candidateId: string): CandidatePr
   return found ? toCandidateProfile(found) : null;
 }
 
-/** The candidate's applications: bound to the account email or submitted with the same email. */
+/**
+ * The candidate's applications: only those the server bound to this account because they were
+ * submitted while signed in. Guest applications that merely carry the same email are not shown,
+ * since registering an account does not prove ownership of the email address.
+ */
 export function applicationsForCandidate(state: CMSState, email: string): CandidateApplication[] {
   const wanted = email.trim().toLowerCase();
   return (state.careerApplications || [])
-    .filter(
-      (a) => a.applicantAccountEmail?.toLowerCase() === wanted || (a.email || '').toLowerCase() === wanted
-    )
+    .filter((a) => !a.isGuestApplication && a.applicantAccountEmail?.toLowerCase() === wanted)
     .map((a) => {
       const copy: Record<string, unknown> = { ...a };
       delete copy.cvFileDataUrl;

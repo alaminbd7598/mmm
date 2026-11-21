@@ -10,6 +10,7 @@ const auth: StoredUserAuth = {
   role: 'Principal / Vice Principal',
   passwordHash: '$2b$12$hash',
   mustChangePassword: true,
+  sessionVersion: 0,
 };
 
 test('toSafeUser strips password fields and uses the auth record', () => {

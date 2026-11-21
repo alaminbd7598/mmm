@@ -41,8 +41,9 @@ export async function POST(req: Request) {
       throw new HttpError(400, 'The new password must differ from the current one.', 'SAME_AS_CURRENT');
     }
 
-    await store.setUserPassword(auth.id, await hashPassword(newPassword), false);
-    await createStaffSession(await cookies(), { ...session, mustChangePassword: false });
+    // Changing the password voids every existing session; this browser gets a fresh one.
+    const sv = await store.setUserPassword(auth.id, await hashPassword(newPassword), false);
+    await createStaffSession(await cookies(), { ...session, mustChangePassword: false, sv });
     return json({ ok: true, mustChangePassword: false });
   } catch (err) {
     return handleError(err);

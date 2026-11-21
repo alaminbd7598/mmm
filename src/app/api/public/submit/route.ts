@@ -6,7 +6,8 @@ export const dynamic = 'force-dynamic';
 
 const MAX_BODY_BYTES = 6 * 1024 * 1024;
 const WINDOW_MS = 10 * 60 * 1000;
-const LIMIT = 10;
+/** Guardians often share one address (school Wi-Fi, mobile carrier NAT), so the per-address limit is generous. */
+const LIMIT = 30;
 
 /** Anonymous create-only submissions: leads, admin notification logs, complaints, job applications. */
 export async function POST(req: Request) {

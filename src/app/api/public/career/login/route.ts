@@ -1,4 +1,5 @@
-import { HttpError, assertSameOrigin, clientIp, handleError, json, rateLimit, readJson } from '@/src/server/http';
+import { HttpError, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
+import { UNKNOWN_CLIENT, clientIp, isLimited, rateLimit } from '@/src/server/rate-limit';
 import { loginCandidate } from '@/src/server/state/career-service';
 import { candidateLoginSchema } from '@/src/server/state/validate';
 
@@ -6,7 +7,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const WINDOW_MS = 15 * 60 * 1000;
-const PER_ACCOUNT_LIMIT = 10;
+/** Failed attempts per account, from any address. */
+const CAREER_LOGIN_FAILURE_LIMIT = 10;
 const PER_IP_LIMIT = 30;
 
 /** Sign a career candidate in; returns their profile and applications. */
@@ -18,12 +20,13 @@ export async function POST(req: Request) {
     const { email, password } = parsed.data;
 
     const ip = clientIp(req);
-    const allowed =
-      rateLimit(`career-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS) &&
-      rateLimit(`career-login:${ip}:${email}`, PER_ACCOUNT_LIMIT, WINDOW_MS);
-    if (!allowed) throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
+    const accountKey = `career-login-account:${email}`;
+    const ipAllowed = ip === UNKNOWN_CLIENT || rateLimit(`career-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS);
+    if (!ipAllowed || isLimited(accountKey, CAREER_LOGIN_FAILURE_LIMIT)) {
+      throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
+    }
 
-    return json(await loginCandidate(email, password));
+    return json(await loginCandidate(email, password, { failureKey: accountKey, limit: CAREER_LOGIN_FAILURE_LIMIT, windowMs: WINDOW_MS }));
   } catch (err) {
     return handleError(err);
   }

@@ -5,7 +5,7 @@ import { hasRolePermission, normalizeAdminRole, type AdminTabId } from '../../ut
 import { STAFF_SESSION_COOKIE, type StaffSession } from '../contracts';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
-import { STAFF_SESSION_TTL_SECONDS, signStaffToken, verifyStaffToken } from './jwt';
+import { STAFF_SESSION_TTL_SECONDS, demoAdminEnabled, signStaffToken, verifyStaffToken } from './jwt';
 import { expireSessionCookie, getJwtSecret, writeSessionCookie, type CookieTarget } from './session-cookie';
 
 export { getJwtSecret } from './session-cookie';
@@ -24,18 +24,22 @@ export async function clearStaffSession(target: CookieTarget): Promise<void> {
 
 /**
  * The signed-in staff member, or null. Besides the JWT, re-checks the stored account: it must
- * still exist, not be disabled, and have the same username and role as when the token was issued.
+ * still exist, not be disabled, and have the same username, role and session version as when the
+ * token was issued.
  * `mustChangePassword` is taken from the store (it is cleared server-side on password change).
  */
 export async function getStaffSession(): Promise<StaffSession | null> {
   const token = (await cookies()).get(STAFF_SESSION_COOKIE)?.value;
   if (!token) return null;
   const store = await getStore();
+  if (store.mode === 'demo' && !demoAdminEnabled()) return null;
   const claims = await verifyStaffToken(token, getJwtSecret(store.mode));
   if (!claims) return null;
   const user = await store.getUserAuthById(claims.userId);
   if (!user || user.disabled) return null;
   if (user.username !== claims.username || normalizeAdminRole(user.role) !== claims.role) return null;
+  // Password change, admin reset and logout raise the stored version and void older tokens.
+  if (user.sessionVersion !== claims.sv) return null;
   return { ...claims, mustChangePassword: user.mustChangePassword };
 }
 

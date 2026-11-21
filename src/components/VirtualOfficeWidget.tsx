@@ -107,7 +107,21 @@ export const VirtualOfficeModal: React.FC<{
         return;
       }
 
-      setUnlocked(data.join as CheckinSuccessPayload);
+      // Offline / busy desks answer without join details: the form stays open and a toast confirms.
+      if (data.join) {
+        const join = data.join as Partial<CheckinSuccessPayload>;
+        setUnlocked({
+          deskMode: join.deskMode || 'ONLINE_LIVE',
+          deskNameBn: join.deskNameBn || '',
+          deskNameEn: join.deskNameEn || '',
+          officerNameBn: join.officerNameBn || '',
+          dutyOfficerPhone: join.dutyOfficerPhone || publicStatus.dutyOfficerPhone || '',
+          platform: join.platform || '',
+          roomUrl: join.roomUrl || null,
+          zoomMeetingId: join.zoomMeetingId,
+          zoomPasscode: join.zoomPasscode,
+        });
+      }
       if (data.session) {
         recordLocalVirtualOfficeSession(data.session);
       }

@@ -27,6 +27,12 @@ import {
 export interface UserAuthState {
   passwordHash: string | null;
   mustChangePassword: boolean;
+  sessionVersion: number;
+}
+
+export interface CandidateAuthState {
+  passwordHash: string | null;
+  sessionVersion: number;
 }
 
 export interface MemoryData {
@@ -36,7 +42,9 @@ export interface MemoryData {
   /** Ordered, sanitised items (no password fields). */
   collections: Record<CollectionKey, StoredItem[]>;
   userAuth: Map<string, UserAuthState>;
-  candidateAuth: Map<string, string | null>;
+  candidateAuth: Map<string, CandidateAuthState>;
+  /** State version of the last write per document: `<singleton key>` or `<collection key>:<id>`. */
+  rowVersions: Map<string, number>;
 }
 
 export function emptyMemoryData(now: string): MemoryData {
@@ -49,6 +57,7 @@ export function emptyMemoryData(now: string): MemoryData {
     collections,
     userAuth: new Map(),
     candidateAuth: new Map(),
+    rowVersions: new Map(),
   };
 }
 
@@ -63,28 +72,38 @@ function writeUserAuth(
   auth.set(id, {
     passwordHash: hash ?? previous?.passwordHash ?? null,
     mustChangePassword: flag ?? previous?.mustChangePassword ?? false,
+    // A password set by an administrator signs the account out everywhere.
+    sessionVersion: (previous?.sessionVersion ?? 0) + (hash && previous ? 1 : 0),
   });
 }
 
 function writeCandidateAuth(
-  auth: Map<string, string | null>,
+  auth: Map<string, CandidateAuthState>,
   id: string,
   opts: ApplyOpsOptions,
-  previous: string | null | undefined
+  previous: CandidateAuthState | undefined
 ): void {
-  auth.set(id, opts.candidatePasswordHashes?.[id] ?? previous ?? null);
+  auth.set(id, {
+    passwordHash: opts.candidatePasswordHashes?.[id] ?? previous?.passwordHash ?? null,
+    sessionVersion: previous?.sessionVersion ?? 0,
+  });
 }
+
+const rowKey = (key: string, id: string): string => `${key}:${id}`;
 
 /**
  * Apply ops to a copy of `data`. Returns the new data with the version bumped once
  * (unless `bumpVersion` is false or there are no ops). `data` is never mutated.
+ * With `opts.baseVersion`, a set / upsert-of-existing / delete whose target was written after the
+ * version the sender saw is skipped and its index pushed to `conflicts` (see ApplyOpsOptions).
  */
 export function applyOpsToMemory(
   data: MemoryData,
   ops: readonly SyncOp[],
   opts: ApplyOpsOptions = {},
   now: string = new Date().toISOString(),
-  bumpVersion = true
+  bumpVersion = true,
+  conflicts: number[] = []
 ): MemoryData {
   if (!ops.length) return data;
   const next: MemoryData = {
@@ -93,11 +112,22 @@ export function applyOpsToMemory(
     collections: { ...data.collections },
     userAuth: new Map(data.userAuth),
     candidateAuth: new Map(data.candidateAuth),
+    rowVersions: new Map(data.rowVersions),
+  };
+  const version = bumpVersion ? data.version + 1 : data.version;
+  const stale = (row: string, opBase: number | undefined): boolean => {
+    const written = next.rowVersions.get(row);
+    return opts.baseVersion !== undefined && written !== undefined && written > (opBase ?? opts.baseVersion);
   };
 
-  for (const op of ops) {
+  for (const [index, op] of ops.entries()) {
     if (op.op === 'set') {
+      if (stale(op.key, op.base)) {
+        conflicts.push(index);
+        continue;
+      }
       next.singletons[op.key] = cloneJson(op.value);
+      next.rowVersions.set(op.key, version);
       continue;
     }
     const key = op.key;
@@ -106,12 +136,22 @@ export function applyOpsToMemory(
       case 'upsert': {
         const item = sanitizeItem(key, op.item);
         const at = current.findIndex((i) => i.id === item.id);
+        if (at !== -1 && stale(rowKey(key, item.id), op.base)) {
+          conflicts.push(index);
+          break;
+        }
+        next.rowVersions.set(rowKey(key, item.id), version);
         next.collections[key] = at === -1 ? [...current, item] : current.map((i, n) => (n === at ? item : i));
         if (key === 'users') writeUserAuth(next.userAuth, item.id, opts, next.userAuth.get(item.id));
         if (key === 'careerCandidates') writeCandidateAuth(next.candidateAuth, item.id, opts, next.candidateAuth.get(item.id));
         break;
       }
       case 'delete': {
+        if (stale(rowKey(key, op.id), op.base)) {
+          conflicts.push(index);
+          break;
+        }
+        next.rowVersions.delete(rowKey(key, op.id));
         next.collections[key] = current.filter((i) => i.id !== op.id);
         if (key === 'users') next.userAuth.delete(op.id);
         if (key === 'careerCandidates') next.candidateAuth.delete(op.id);
@@ -124,6 +164,8 @@ export function applyOpsToMemory(
       }
       case 'replace': {
         const items = dedupeById(op.items).map((i) => sanitizeItem(key, i));
+        for (const old of current) next.rowVersions.delete(rowKey(key, old.id));
+        for (const item of items) next.rowVersions.set(rowKey(key, item.id), version);
         next.collections[key] = items;
         if (key === 'users') {
           const previous = next.userAuth;
@@ -141,7 +183,7 @@ export function applyOpsToMemory(
   }
 
   if (bumpVersion) {
-    next.version = data.version + 1;
+    next.version = version;
     next.updatedAt = now;
   }
   return next;
@@ -164,6 +206,7 @@ function toUserAuth(data: MemoryData, item: StoredItem): StoredUserAuth {
     passwordHash: auth?.passwordHash ?? null,
     mustChangePassword: auth?.mustChangePassword ?? false,
     disabled: cols.disabled,
+    sessionVersion: auth?.sessionVersion ?? 0,
   };
 }
 
@@ -185,5 +228,6 @@ export function findCandidateAuthByEmail(data: MemoryData, email: string): Store
   if (!wanted) return null;
   const item = data.collections.careerCandidates.find((c) => normalizeEmail(c.email) === wanted);
   if (!item) return null;
-  return { id: item.id, email: wanted, passwordHash: data.candidateAuth.get(item.id) ?? null };
+  const auth = data.candidateAuth.get(item.id);
+  return { id: item.id, email: wanted, passwordHash: auth?.passwordHash ?? null, sessionVersion: auth?.sessionVersion ?? 0 };
 }

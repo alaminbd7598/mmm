@@ -2,8 +2,10 @@
  * Turns validated anonymous submissions into sync ops (pure; see POST /api/public/submit).
  *
  * - Every record gets a server-generated id, timestamp and status; client ids are ignored.
- * - A lead whose normalised phone matches a stored (or earlier submitted) lead is not duplicated:
- *   the submission is appended to that lead's notes and the existing id is returned.
+ * - A lead for the SAME student (same guardian phone and same student name) as a stored or
+ *   earlier submitted lead is not duplicated: the submission is appended to that lead's notes.
+ *   A different child on the same phone (siblings) always gets a lead of its own, and a second
+ *   full admission form never replaces or drops an earlier one.
  * - New records are moved to the front of their collection, as the client store always did.
  */
 import type {
@@ -14,7 +16,7 @@ import type {
   GuardianComplaintItem,
   LeadNoteItem,
 } from '../../types/cms';
-import { findMatchingLeadByPhone, resolveCourseTitle } from '../../utils/cmsLogic';
+import { normalizePhoneNumber, resolveCourseTitle } from '../../utils/cmsLogic';
 import type { CandidateSession, CollectionKey, PublicCreateKey, SyncOp } from '../contracts';
 import type { IdFactory } from './ids';
 import type {
@@ -53,8 +55,64 @@ function submissionSummary(lead: PublicLeadInput): string {
   return lead.message ? `[${lead.source}] ${contact} — ${lead.message}` : `[${lead.source}] ${contact}`;
 }
 
-function newLead(input: PublicLeadInput, state: CMSState, ctx: PublicSubmitContext): AdmissionLead {
+const nameKey = (name: string | undefined): string =>
+  (name || '')
+    .split('(')[0]
+    .toLowerCase()
+    .replace(/[\s.,\-_'"’‘]+/g, '');
+
+/** Normalised names a lead is known by: its display name (before any bracket) and the form's student names. */
+export function studentNameKeys(lead: { name?: string; detailedData?: { studentNameBn?: string; studentNameEn?: string } }): Set<string> {
+  const keys = [lead.name, lead.detailedData?.studentNameBn, lead.detailedData?.studentNameEn].map(nameKey);
+  return new Set(keys.filter((k) => k.length > 0));
+}
+
+const leadPhones = (lead: AdmissionLead): string[] =>
+  [lead.phone, lead.detailedData?.fatherMobile, lead.detailedData?.guardianMobile]
+    .map((p) => normalizePhoneNumber(p || ''))
+    .filter((p) => p.length >= 10);
+
+export interface LeadMatches {
+  /** A lead with this phone AND this student name: the same applicant submitting again. */
+  sameStudent?: AdmissionLead;
+  /** Another lead on this phone (e.g. a sibling), when there is no same-student match. */
+  samePhone?: AdmissionLead;
+}
+
+/** Stored leads related to a submission by guardian phone, split by whether the student matches. */
+export function findLeadMatches(
+  leads: readonly AdmissionLead[],
+  phone: string,
+  incoming: { name?: string; detailedData?: { studentNameBn?: string; studentNameEn?: string } }
+): LeadMatches {
+  const wanted = normalizePhoneNumber(phone);
+  if (wanted.length < 10) return {};
+  const onPhone = leads.filter((l) => leadPhones(l).includes(wanted));
+  const names = studentNameKeys(incoming);
+  const sameStudent = onPhone.find((l) => [...studentNameKeys(l)].some((k) => names.has(k)));
+  return sameStudent ? { sameStudent } : { samePhone: onPhone[0] };
+}
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+function newLead(
+  input: PublicLeadInput,
+  state: CMSState,
+  ctx: PublicSubmitContext,
+  related?: AdmissionLead
+): AdmissionLead {
   const full = isFullAdmission(input);
+  const lead = newLeadRecord(input, state, ctx, full);
+  if (related) {
+    lead.notes = [
+      ...(lead.notes || []),
+      note(ctx, NOTE_AUTHOR_SYSTEM, `একই অভিভাবকের মোবাইল নম্বরে আরেকটি আবেদন আছে: ${related.name} (${related.id})`),
+    ];
+  }
+  return lead;
+}
+
+function newLeadRecord(input: PublicLeadInput, state: CMSState, ctx: PublicSubmitContext, full: boolean): AdmissionLead {
   return {
     ...input,
     id: ctx.newId('lead'),
@@ -153,8 +211,14 @@ export function planPublicSubmit(items: readonly PublicItemInput[], state: CMSSt
     switch (entry.key) {
       case 'leads': {
         const phone = entry.item.phone || entry.item.detailedData?.fatherMobile || '';
-        const match = findMatchingLeadByPhone(leads, phone);
-        const lead = match ? mergeIntoLead(match, entry.item, ctx) : newLead(entry.item, state, ctx);
+        const { sameStudent, samePhone } = findLeadMatches(leads, phone, entry.item);
+        // A second, different full form for the same student is kept as its own record.
+        const secondForm =
+          sameStudent?.detailedData && entry.item.detailedData && !sameJson(sameStudent.detailedData, entry.item.detailedData);
+        const match = secondForm ? undefined : sameStudent;
+        const lead = match
+          ? mergeIntoLead(match, entry.item, ctx)
+          : newLead(entry.item, state, ctx, sameStudent ?? samePhone);
         if (match) leads[leads.indexOf(match)] = lead;
         else leads.unshift(lead);
         builder.write('leads', lead, !match);

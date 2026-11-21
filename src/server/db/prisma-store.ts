@@ -2,6 +2,7 @@
 import {
   COLLECTION_KEYS,
   SINGLETON_KEYS,
+  type ApplyOpsResult,
   type CollectionKey,
   type DataStore,
   type StateSnapshot,
@@ -14,6 +15,7 @@ import { INITIAL_CMS_STATE } from '../../data/seedData';
 import { normalizeAdminRole } from '../../utils/cmsLogic';
 import { Prisma } from '../../generated/prisma/client';
 import {
+  cloneJson,
   computeOrder,
   dedupeById,
   indexedColumns,
@@ -30,9 +32,23 @@ import type { SeedPlan } from './seed';
 
 const META_ID = 1;
 const TX_OPTIONS = { maxWait: 10_000, timeout: 60_000 } as const;
+/** Reads give up quickly when no connection is available, so polling requests fail fast (503). */
+const READ_TX_OPTIONS = { maxWait: 4_000, timeout: 30_000 } as const;
 
 function knownCode(err: unknown): string | undefined {
   return err instanceof Prisma.PrismaClientKnownRequestError ? err.code : undefined;
+}
+
+/** Prisma codes for "cannot reach / talk to the database" (server down, pool exhausted, timeouts). */
+const UNAVAILABLE_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2028', 'P2037', 'P2039']);
+
+function isConnectionFailure(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'DriverAdapterError') return true;
+  return /pool (timeout|failed)|failed to retrieve a connection|ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket has been ended/i.test(
+    err.message
+  );
 }
 
 /** Translate driver errors into store errors without exposing SQL or data. */
@@ -45,10 +61,25 @@ function translateError(err: unknown): unknown {
   if (code === 'P2021' || code === 'P2022') {
     return new StoreUnavailableError('Database schema is missing or outdated. Run `npm run db:push`.');
   }
-  if (err instanceof Prisma.PrismaClientInitializationError) {
+  if ((code && UNAVAILABLE_CODES.has(code)) || isConnectionFailure(err)) {
     return new StoreUnavailableError('Database is unreachable.');
   }
   return err;
+}
+
+/** Recursively freeze a cached snapshot so no request can alter what later requests read. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
+}
+
+/** Whether an op must be skipped because its target was written after the version the sender saw. */
+function isStale(rowVersion: number | undefined, opBase: number | undefined, opts: ApplyOpsOptions): boolean {
+  if (opts.baseVersion === undefined || rowVersion === undefined) return false;
+  return rowVersion > (opBase ?? opts.baseVersion);
 }
 
 function parseDocument(raw: string): Record<string, unknown> {
@@ -59,18 +90,39 @@ function parseDocument(raw: string): Record<string, unknown> {
 export class PrismaStore implements DataStore {
   readonly mode = 'database' as const;
   private initPromise: Promise<void> | null = null;
+  /**
+   * The last loaded snapshot. Every request needs the state, so it is read from the database
+   * once per version (one cheap version query per request otherwise) instead of on every call.
+   */
+  private cached: StateSnapshot | null = null;
 
+  /**
+   * @param loadSeed produces the seed plan for an empty database.
+   * @param afterInit runs once per process after seeding (bootstrap password); receives this store.
+   */
   constructor(
     private readonly db: DbClient,
-    private readonly loadSeed: () => Promise<SeedPlan>
+    private readonly loadSeed: () => Promise<SeedPlan>,
+    private readonly afterInit?: (store: PrismaStore) => Promise<void>
   ) {}
 
   init(): Promise<void> {
-    this.initPromise ??= this.ensureSeeded().catch((err) => {
-      this.initPromise = null;
-      throw translateError(err);
-    });
+    this.initPromise ??= this.ensureSeeded()
+      .then(() => this.afterInit?.(this))
+      .catch((err) => {
+        this.initPromise = null;
+        throw translateError(err);
+      });
     return this.initPromise;
+  }
+
+  /** Runs a query, translating driver failures into store errors. */
+  private async guarded<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      throw translateError(err);
+    }
   }
 
   /**
@@ -84,7 +136,7 @@ export class PrismaStore implements DataStore {
     try {
       await this.db.$transaction(async (tx) => {
         await tx.siteMeta.create({ data: { id: META_ID, version: 1 } });
-        await this.writeOps(tx, plan.ops, plan.opts);
+        await this.writeOps(tx, plan.ops, plan.opts, 1);
       }, TX_OPTIONS);
     } catch (err) {
       if (knownCode(err) === 'P2002' && (await this.db.siteMeta.findUnique({ where: { id: META_ID } }))) return;
@@ -94,23 +146,25 @@ export class PrismaStore implements DataStore {
 
   async getVersion(): Promise<{ version: number; updatedAt: string }> {
     await this.init();
-    const meta = await this.db.siteMeta.findUnique({ where: { id: META_ID } });
+    const meta = await this.guarded(() => this.db.siteMeta.findUnique({ where: { id: META_ID } }));
     if (!meta) throw new StoreUnavailableError('Database is not seeded.');
     return { version: meta.version, updatedAt: meta.updatedAt.toISOString() };
   }
 
+  /** The returned snapshot is shared and frozen: callers must copy before changing anything. */
   async getSnapshot(): Promise<StateSnapshot> {
-    await this.init();
+    const current = await this.getVersion();
+    if (this.cached && this.cached.version === current.version) return this.cached;
     try {
       // One read transaction so the snapshot is consistent with its version.
-      return await this.db.$transaction(async (tx) => {
+      const snapshot = await this.db.$transaction(async (tx) => {
         const meta = await tx.siteMeta.findUnique({ where: { id: META_ID } });
         if (!meta) throw new StoreUnavailableError('Database is not seeded.');
         const state: Record<string, unknown> = {};
         for (const row of await tx.siteSetting.findMany()) state[row.key] = parseDocument(row.data);
         // Singletons added to the code after this database was seeded fall back to their defaults.
         for (const key of SINGLETON_KEYS) {
-          if (!(key in state) && INITIAL_CMS_STATE[key] !== undefined) state[key] = INITIAL_CMS_STATE[key];
+          if (!(key in state) && INITIAL_CMS_STATE[key] !== undefined) state[key] = cloneJson(INITIAL_CMS_STATE[key]);
         }
         for (const key of COLLECTION_KEYS) {
           const t = COLLECTION_TABLES[key];
@@ -126,51 +180,75 @@ export class PrismaStore implements DataStore {
           updatedAt: meta.updatedAt.toISOString(),
           state: state as unknown as CMSState,
         };
-      }, TX_OPTIONS);
+      }, READ_TX_OPTIONS);
+      this.cached = deepFreeze(snapshot);
+      return snapshot;
     } catch (err) {
       throw translateError(err);
     }
   }
 
-  async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<{ version: number; updatedAt: string }> {
+  async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<ApplyOpsResult> {
     await this.init();
     if (!ops.length) return this.getVersion();
     try {
       return await this.db.$transaction(async (tx) => {
         // Bumping first takes the SiteMeta row lock, serialising writers (no deadlocks, stable positions).
         const meta = await tx.siteMeta.update({ where: { id: META_ID }, data: { version: { increment: 1 } } });
-        await this.writeOps(tx, ops, opts);
-        return { version: meta.version, updatedAt: meta.updatedAt.toISOString() };
+        const conflicts = await this.writeOps(tx, ops, opts, meta.version);
+        return {
+          version: meta.version,
+          updatedAt: meta.updatedAt.toISOString(),
+          ...(conflicts.length ? { conflicts } : {}),
+        };
       }, TX_OPTIONS);
     } catch (err) {
       throw translateError(err);
     }
   }
 
-  private async writeOps(tx: Tx, ops: readonly SyncOp[], opts: ApplyOpsOptions): Promise<void> {
-    for (const op of ops) {
+  /** Applies the ops in order, stamping written rows with `version`. Returns the indexes of conflicting ops. */
+  private async writeOps(tx: Tx, ops: readonly SyncOp[], opts: ApplyOpsOptions, version: number): Promise<number[]> {
+    const conflicts: number[] = [];
+    for (const [index, op] of ops.entries()) {
       switch (op.op) {
         case 'set': {
           const data = JSON.stringify(op.value);
-          await tx.siteSetting.upsert({ where: { key: op.key }, create: { key: op.key, data }, update: { data } });
+          const existing = await tx.siteSetting.findUnique({ where: { key: op.key }, select: { version: true } });
+          if (isStale(existing?.version, op.base, opts)) {
+            conflicts.push(index);
+            break;
+          }
+          await tx.siteSetting.upsert({
+            where: { key: op.key },
+            create: { key: op.key, data, version },
+            update: { data, version },
+          });
           break;
         }
         case 'upsert':
-          await this.upsertItem(tx, op.key, op.item, opts);
+          if (!(await this.upsertItem(tx, op.key, op.item, opts, version, op.base))) conflicts.push(index);
           break;
         case 'delete': {
           const t = COLLECTION_TABLES[op.key];
-          await t.delegate(tx).deleteMany({ where: { ...t.scope, id: op.id } });
+          const where = { ...t.scope, id: op.id };
+          const existing = await t.delegate(tx).findFirst({ where, select: { id: true, position: true, version: true } });
+          if (isStale(existing?.version, op.base, opts)) {
+            conflicts.push(index);
+            break;
+          }
+          await t.delegate(tx).deleteMany({ where });
           break;
         }
         case 'order':
           await this.reorder(tx, op.key, op.ids);
           break;
         case 'replace':
-          await this.replaceCollection(tx, op.key, op.items, opts);
+          await this.replaceCollection(tx, op.key, op.items, opts, version);
           break;
       }
     }
+    return conflicts;
   }
 
   /** Columns derived from the item plus auth columns for users / candidates. */
@@ -178,37 +256,53 @@ export class PrismaStore implements DataStore {
     key: CollectionKey,
     item: StoredItem,
     opts: ApplyOpsOptions,
-    previous: { passwordHash?: string | null; mustChangePassword?: boolean } | null
+    previous: { passwordHash?: string | null; mustChangePassword?: boolean; sessionVersion?: number } | null,
+    version: number
   ): Record<string, unknown> {
-    const fields: Record<string, unknown> = { data: JSON.stringify(item), ...indexedColumns(key, item) };
+    const fields: Record<string, unknown> = { data: JSON.stringify(item), version, ...indexedColumns(key, item) };
     if (key === 'users') {
-      fields.passwordHash = opts.passwordHashes?.[item.id] ?? previous?.passwordHash ?? null;
+      const newHash = opts.passwordHashes?.[item.id];
+      fields.passwordHash = newHash ?? previous?.passwordHash ?? null;
       fields.mustChangePassword = opts.mustChangePassword?.[item.id] ?? previous?.mustChangePassword ?? false;
+      // A password set by an administrator signs the account out everywhere.
+      fields.sessionVersion = (previous?.sessionVersion ?? 0) + (newHash && previous ? 1 : 0);
     } else if (key === 'careerCandidates') {
       fields.passwordHash = opts.candidatePasswordHashes?.[item.id] ?? previous?.passwordHash ?? null;
+      fields.sessionVersion = previous?.sessionVersion ?? 0;
     }
     return fields;
   }
 
   private authSelect(key: CollectionKey): Record<string, true> {
-    if (key === 'users') return { id: true, position: true, passwordHash: true, mustChangePassword: true };
-    if (key === 'careerCandidates') return { id: true, position: true, passwordHash: true };
-    return { id: true, position: true };
+    const base = { id: true, position: true, version: true } as const;
+    if (key === 'users') return { ...base, passwordHash: true, mustChangePassword: true, sessionVersion: true };
+    if (key === 'careerCandidates') return { ...base, passwordHash: true, sessionVersion: true };
+    return base;
   }
 
-  private async upsertItem(tx: Tx, key: CollectionKey, raw: StoredItem, opts: ApplyOpsOptions): Promise<void> {
+  /** Returns false (nothing written) when the stored item is newer than the version the sender saw. */
+  private async upsertItem(
+    tx: Tx,
+    key: CollectionKey,
+    raw: StoredItem,
+    opts: ApplyOpsOptions,
+    version: number,
+    opBase?: number
+  ): Promise<boolean> {
     const t: CollectionTable = COLLECTION_TABLES[key];
     const d = t.delegate(tx);
     const item = sanitizeItem(key, raw);
     const where = { ...t.scope, id: item.id };
     const existing = await d.findFirst({ where, select: this.authSelect(key) });
-    const fields = this.rowFields(key, item, opts, existing);
+    if (isStale(existing?.version, opBase, opts)) return false;
+    const fields = this.rowFields(key, item, opts, existing, version);
     if (existing) {
       await d.updateMany({ where, data: fields });
-      return;
+      return true;
     }
     const max = await d.aggregate({ where: t.scope, _max: { position: true } });
     await d.create({ data: { ...t.scope, id: item.id, position: (max._max.position ?? -1) + 1, ...fields } });
+    return true;
   }
 
   private async reorder(tx: Tx, key: CollectionKey, ids: readonly string[]): Promise<void> {
@@ -226,7 +320,8 @@ export class PrismaStore implements DataStore {
     tx: Tx,
     key: CollectionKey,
     rawItems: readonly StoredItem[],
-    opts: ApplyOpsOptions
+    opts: ApplyOpsOptions,
+    version: number
   ): Promise<void> {
     const t = COLLECTION_TABLES[key];
     const d = t.delegate(tx);
@@ -243,7 +338,7 @@ export class PrismaStore implements DataStore {
         ...t.scope,
         id: item.id,
         position,
-        ...this.rowFields(key, item, opts, previous.get(item.id) ?? null),
+        ...this.rowFields(key, item, opts, previous.get(item.id) ?? null, version),
       })),
     });
   }
@@ -252,16 +347,24 @@ export class PrismaStore implements DataStore {
     const wanted = normalizeUsername(username);
     if (!wanted) return null;
     await this.init();
-    return this.toUserAuth(await this.db.user.findUnique({ where: { username: wanted } }));
+    return this.toUserAuth(await this.guarded(() => this.db.user.findUnique({ where: { username: wanted } })));
   }
 
   async getUserAuthById(id: string): Promise<StoredUserAuth | null> {
     await this.init();
-    return this.toUserAuth(await this.db.user.findUnique({ where: { id } }));
+    return this.toUserAuth(await this.guarded(() => this.db.user.findUnique({ where: { id } })));
   }
 
   private toUserAuth(
-    row: { id: string; username: string; role: string; passwordHash: string | null; mustChangePassword: boolean; disabled: boolean } | null
+    row: {
+      id: string;
+      username: string;
+      role: string;
+      passwordHash: string | null;
+      mustChangePassword: boolean;
+      disabled: boolean;
+      sessionVersion: number;
+    } | null
   ): StoredUserAuth | null {
     if (!row) return null;
     return {
@@ -271,26 +374,69 @@ export class PrismaStore implements DataStore {
       passwordHash: row.passwordHash,
       mustChangePassword: row.mustChangePassword,
       disabled: row.disabled,
+      sessionVersion: row.sessionVersion,
     };
   }
 
-  async setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<void> {
+  async setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<number> {
     await this.init();
-    const { count } = await this.db.user.updateMany({ where: { id }, data: { passwordHash, mustChangePassword } });
-    if (!count) throw new StoreNotFoundError('User not found.');
+    return this.guarded(async () => {
+      const { count } = await this.db.user.updateMany({
+        where: { id },
+        data: { passwordHash, mustChangePassword, sessionVersion: { increment: 1 } },
+      });
+      if (!count) throw new StoreNotFoundError('User not found.');
+      return (await this.db.user.findUnique({ where: { id }, select: { sessionVersion: true } }))?.sessionVersion ?? 0;
+    });
+  }
+
+  async bumpUserSessionVersion(id: string): Promise<number> {
+    await this.init();
+    return this.guarded(async () => {
+      await this.db.user.updateMany({ where: { id }, data: { sessionVersion: { increment: 1 } } });
+      return (await this.db.user.findUnique({ where: { id }, select: { sessionVersion: true } }))?.sessionVersion ?? 0;
+    });
+  }
+
+  /** Active Super Admin accounts in display order, with whether each has a password (bootstrap check). */
+  async listSuperAdmins(): Promise<Array<{ id: string; hasPassword: boolean }>> {
+    const rows = await this.guarded(() =>
+      this.db.user.findMany({
+        where: { role: 'Super Admin', disabled: false },
+        orderBy: POSITION_ORDER,
+        select: { id: true, passwordHash: true },
+      })
+    );
+    return rows.map((r) => ({ id: r.id, hasPassword: Boolean(r.passwordHash) }));
+  }
+
+  /** Sets a password without going through init() (used by the bootstrap step inside init). */
+  async setInitialPassword(id: string, passwordHash: string): Promise<void> {
+    await this.guarded(() =>
+      this.db.user.updateMany({
+        where: { id, passwordHash: null },
+        data: { passwordHash, mustChangePassword: true, sessionVersion: { increment: 1 } },
+      })
+    );
   }
 
   async getCandidateAuthByEmail(email: string): Promise<StoredCandidateAuth | null> {
     const wanted = normalizeEmail(email);
     if (!wanted) return null;
     await this.init();
-    const row = await this.db.careerCandidate.findUnique({ where: { email: wanted } });
-    return row ? { id: row.id, email: row.email ?? wanted, passwordHash: row.passwordHash } : null;
+    const row = await this.guarded(() => this.db.careerCandidate.findUnique({ where: { email: wanted } }));
+    return row
+      ? { id: row.id, email: row.email ?? wanted, passwordHash: row.passwordHash, sessionVersion: row.sessionVersion }
+      : null;
   }
 
-  async setCandidatePassword(id: string, passwordHash: string): Promise<void> {
+  async bumpCandidateSessionVersion(id: string): Promise<number> {
     await this.init();
-    const { count } = await this.db.careerCandidate.updateMany({ where: { id }, data: { passwordHash } });
-    if (!count) throw new StoreNotFoundError('Candidate not found.');
+    return this.guarded(async () => {
+      await this.db.careerCandidate.updateMany({ where: { id }, data: { sessionVersion: { increment: 1 } } });
+      return (
+        (await this.db.careerCandidate.findUnique({ where: { id }, select: { sessionVersion: true } }))?.sessionVersion ?? 0
+      );
+    });
   }
 }

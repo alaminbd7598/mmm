@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     const store = await getStore();
     const { state } = await store.getSnapshot();
     const config = getEffectiveVirtualOfficeConfig(state.virtualOfficeConfig);
-    const plan = planVirtualOfficeCheckin(parsed.data, config, new Date());
+    const plan = planVirtualOfficeCheckin(parsed.data, config, new Date(), state.leads || []);
     await store.applyOps(checkinOps(plan, storedSessions(state).map((s) => s.id)));
     return json(checkinResponse(plan));
   } catch (err) {

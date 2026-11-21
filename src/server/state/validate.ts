@@ -5,6 +5,7 @@
  * Zod objects strip unknown keys, so admin-only fields never get past these schemas.
  */
 import { z } from 'zod';
+import { isValidEmail, isValidPhone, toAsciiDigits } from '../../utils/contactValidation';
 import {
   COLLECTION_KEYS,
   PUBLIC_CREATE_KEYS,
@@ -41,13 +42,9 @@ const text = (max: number) => z.string().trim().max(max);
 const requiredText = (max: number) => text(max).min(1);
 const optionalText = (max: number) => text(max).optional();
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const emailSchema = text(254).toLowerCase().refine((v) => EMAIL_RE.test(v), 'Invalid email address.');
-/** Phone as typed by visitors; must contain 10–15 digits. */
-const phoneSchema = text(40).refine((v) => {
-  const digits = v.replace(/\D/g, '').length;
-  return digits >= 10 && digits <= 15;
-}, 'Invalid phone number.');
+const emailSchema = text(254).toLowerCase().refine(isValidEmail, 'Invalid email address.');
+/** Phone as typed by visitors (any digit script); stored with ASCII digits. */
+const phoneSchema = text(40).transform(toAsciiDigits).refine(isValidPhone, 'Invalid phone number.');
 
 const DATA_URL_RE = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+)((?:;[a-z0-9-]+=[a-z0-9.+-]+)*);base64,([a-z0-9+/]*={0,2})$/i;
 
@@ -106,11 +103,12 @@ export const cvFileSchema = uploadSchema(DOCUMENT_MIME, MAX_DOCUMENT_BYTES, 'CV 
 // ---------------------------------------------------------------------------------------------
 
 const syncItemSchema = z.looseObject({ id: idSchema });
+const baseSchema = z.number().int().nonnegative().optional();
 
 export const syncOpSchema = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('set'), key: z.enum(SINGLETON_KEYS), value: z.record(z.string(), z.unknown()) }),
-  z.object({ op: z.literal('upsert'), key: z.enum(COLLECTION_KEYS), item: syncItemSchema }),
-  z.object({ op: z.literal('delete'), key: z.enum(COLLECTION_KEYS), id: idSchema }),
+  z.object({ op: z.literal('set'), key: z.enum(SINGLETON_KEYS), value: z.record(z.string(), z.unknown()), base: baseSchema }),
+  z.object({ op: z.literal('upsert'), key: z.enum(COLLECTION_KEYS), item: syncItemSchema, base: baseSchema }),
+  z.object({ op: z.literal('delete'), key: z.enum(COLLECTION_KEYS), id: idSchema, base: baseSchema }),
   z.object({ op: z.literal('order'), key: z.enum(COLLECTION_KEYS), ids: z.array(idSchema).max(MAX_COLLECTION_ITEMS) }),
   z.object({
     op: z.literal('replace'),
@@ -299,7 +297,7 @@ export const careerStatusSchema = z.object({ query: z.string().trim().min(5).max
 export const candidateRegisterSchema = z.object({
   fullName: text(200).refine((v) => v.length >= 2, 'Full name is required.'),
   email: emailSchema,
-  phone: text(40).refine((v) => v.replace(/\D/g, '').length >= 10, 'Invalid phone number.'),
+  phone: phoneSchema,
   password: z.string().min(1).max(256),
 });
 

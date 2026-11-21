@@ -171,9 +171,19 @@ test('MemoryStore auth lookups and password updates', async () => {
     passwordHash: 'hash-u1',
     mustChangePassword: false,
     disabled: false,
+    sessionVersion: 0,
   });
-  await store.setUserPassword('u1', 'hash-2', true);
+  assert.equal(await store.setUserPassword('u1', 'hash-2', true), 1, 'a password change bumps the session version');
   assert.equal((await store.getUserAuthById('u1'))?.passwordHash, 'hash-2');
+  assert.equal(await store.bumpUserSessionVersion('u1'), 2, 'logout bumps it again');
+  // An administrator resetting the password through sync also signs the user out everywhere.
+  await store.applyOps([{ op: 'upsert', key: 'users', item: user('u1', 'Admin', { role: 'Super Admin' }) }], {
+    passwordHashes: { u1: 'hash-3' },
+  });
+  assert.equal((await store.getUserAuthById('u1'))?.sessionVersion, 3);
+  // A plain profile edit does not.
+  await store.applyOps([{ op: 'upsert', key: 'users', item: user('u1', 'Admin', { role: 'Super Admin', bio: 'x' }) }]);
+  assert.equal((await store.getUserAuthById('u1'))?.sessionVersion, 3);
   await assert.rejects(store.setUserPassword('missing', 'h', false), StoreNotFoundError);
 
   await store.applyOps(
@@ -184,8 +194,50 @@ test('MemoryStore auth lookups and password updates', async () => {
     id: 'c1',
     email: 'cand@example.test',
     passwordHash: 'hash-c1',
+    sessionVersion: 0,
   });
-  await store.setCandidatePassword('c1', 'hash-c2');
-  assert.equal((await store.getCandidateAuthByEmail('cand@example.test'))?.passwordHash, 'hash-c2');
+  assert.equal(await store.bumpCandidateSessionVersion('c1'), 1);
+  assert.equal((await store.getCandidateAuthByEmail('cand@example.test'))?.sessionVersion, 1);
   assert.equal(await store.getUserAuthByUsername(''), null);
+});
+
+test('conflict detection: a document changed after the sender\'s base version is not overwritten', async () => {
+  const store = new MemoryStore(fixturePlan);
+  await store.init(); // version 1
+  const item = (title: string) => ({ id: 'n1', title });
+  const created = await store.applyOps([{ op: 'upsert', key: 'notices', item: item('first') }], { baseVersion: 1 });
+  assert.equal(created.version, 2);
+  assert.equal(created.conflicts, undefined, 'creating an item never conflicts');
+
+  // Admin A (base 2) edits; admin B still on base 2 then tries to edit, set and delete the same things.
+  const a = await store.applyOps(
+    [
+      { op: 'upsert', key: 'notices', item: item('edit by A') },
+      { op: 'set', key: 'popupConfig', value: { enabled: false } },
+    ],
+    { baseVersion: 2 }
+  );
+  assert.equal(a.conflicts, undefined);
+  const b = await store.applyOps(
+    [
+      { op: 'upsert', key: 'notices', item: item('edit by B') },
+      { op: 'set', key: 'popupConfig', value: { enabled: true, by: 'B' } },
+      { op: 'delete', key: 'notices', id: 'n1' },
+      { op: 'upsert', key: 'notices', item: { id: 'n2', title: 'new from B' } },
+    ],
+    { baseVersion: 2 }
+  );
+  assert.deepEqual(b.conflicts, [0, 1, 2]);
+  const { state } = await store.getSnapshot();
+  assert.deepEqual((state.notices as unknown as Array<{ id: string; title: string }>).map((n) => n.title), ['edit by A', 'new from B']);
+  assert.deepEqual(state.popupConfig, { enabled: false });
+
+  // B's own later write to a document it wrote itself passes with a per-op base (see SyncOp.base).
+  const own = await store.applyOps([{ op: 'upsert', key: 'notices', item: { id: 'n2', title: 'B again' }, base: b.version }], {
+    baseVersion: 2,
+  });
+  assert.equal(own.conflicts, undefined);
+  // Server-originated writes (no baseVersion) always apply.
+  const server = await store.applyOps([{ op: 'upsert', key: 'notices', item: item('server') }]);
+  assert.equal(server.conflicts, undefined);
 });

@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { normalizeAdminRole } from '@/src/utils/cmsLogic';
 import type { LoginResponse } from '@/src/server/contracts';
 import { getStore } from '@/src/server/db/store';
-import { HttpError, assertSameOrigin, clientIp, handleError, json, rateLimit, readJson } from '@/src/server/http';
+import { HttpError, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
+import { UNKNOWN_CLIENT, clientIp, consume, isLimited, rateLimit, resetLimit } from '@/src/server/rate-limit';
+import { demoAdminEnabled } from '@/src/server/auth/jwt';
+import { isSuperAdmin } from '@/src/server/state/permissions';
 import { verifyPassword } from '@/src/server/auth/password';
 import { findProfile, toSafeUser } from '@/src/server/auth/safe-user';
 import { createStaffSession, getJwtSecret } from '@/src/server/auth/session';
@@ -12,7 +15,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const WINDOW_MS = 15 * 60 * 1000;
-const PER_USER_LIMIT = 10;
+/** Failed attempts per username, from any address (brute-force lockout that ignores the IP). */
+const PER_USER_FAILURE_LIMIT = 10;
 const PER_IP_LIMIT = 50;
 
 const loginSchema = z.object({
@@ -31,17 +35,38 @@ export async function POST(req: Request) {
     const { username, password, expectedRole } = parsed.data;
 
     const ip = clientIp(req);
-    const allowed =
-      rateLimit(`auth-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS) &&
-      rateLimit(`auth-login:${ip}:${username.toLowerCase()}`, PER_USER_LIMIT, WINDOW_MS);
-    if (!allowed) throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
+    const userKey = `auth-login-user:${username.toLowerCase()}`;
+    // Requests without a trustworthy address are only limited per username (no shared IP bucket).
+    const ipAllowed = ip === UNKNOWN_CLIENT || rateLimit(`auth-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS);
+    if (!ipAllowed || isLimited(userKey, PER_USER_FAILURE_LIMIT)) {
+      throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
+    }
 
     const store = await getStore();
+    if (store.mode === 'demo' && !demoAdminEnabled()) {
+      throw new HttpError(
+        503,
+        'Sign-in is disabled: this server has no database configured (set DATABASE_URL, or DEMO_MODE=1 for a demo).',
+        'NOT_CONFIGURED'
+      );
+    }
     getJwtSecret(store.mode); // fail fast with NOT_CONFIGURED before touching credentials
 
     const auth = await store.getUserAuthByUsername(username);
+    if (auth && !auth.passwordHash && !auth.disabled && isSuperAdmin(auth.role)) {
+      // Fresh database without ADMIN_BOOTSTRAP_PASSWORD: there is no password to check yet.
+      throw new HttpError(
+        503,
+        'No administrator password has been set. Set ADMIN_BOOTSTRAP_PASSWORD on the server and restart it.',
+        'NOT_CONFIGURED'
+      );
+    }
     const passwordOk = await verifyPassword(password, auth?.passwordHash);
-    if (!auth || auth.disabled || !passwordOk) throw invalidCredentials();
+    if (!auth || auth.disabled || !passwordOk) {
+      consume(userKey, PER_USER_FAILURE_LIMIT, WINDOW_MS);
+      throw invalidCredentials();
+    }
+    resetLimit(userKey);
 
     const role = normalizeAdminRole(auth.role);
     if (expectedRole && normalizeAdminRole(expectedRole) !== role) {
@@ -54,6 +79,7 @@ export async function POST(req: Request) {
       username: auth.username,
       role,
       mustChangePassword: auth.mustChangePassword,
+      sv: auth.sessionVersion,
     });
 
     const snapshot = await store.getSnapshot();

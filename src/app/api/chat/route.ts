@@ -1,5 +1,6 @@
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertRateLimit, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
+import { consume } from '@/src/server/rate-limit';
 import { getGenAI, getGeminiModel } from '@/src/server/ai/gemini';
 import { buildChatSystemPrompt, chatRequestSchema } from '@/src/server/ai/chat-prompt';
 
@@ -8,6 +9,12 @@ export const dynamic = 'force-dynamic';
 
 const MAX_BODY_BYTES = 8 * 1024;
 const GEMINI_TIMEOUT_MS = 25_000;
+
+/** CHAT_DAILY_LIMIT (default 3000): Gemini-backed chat replies per day across all visitors. */
+function chatDailyLimit(): number {
+  const raw = Number.parseInt(process.env.CHAT_DAILY_LIMIT ?? '', 10);
+  return Number.isInteger(raw) && raw >= 0 ? raw : 3000;
+}
 
 /** Noor AI. `{reply: null}` tells the widget to keep its local knowledge-base answer. */
 export async function POST(req: Request) {
@@ -25,6 +32,9 @@ export async function POST(req: Request) {
 
     const { state } = await (await getStore()).getSnapshot();
     if (state.aiBotConfig?.enabled === false) return json({ reply: null });
+    // Site-wide daily cap on paid Gemini calls, whatever addresses the requests come from.
+    // Beyond it the widget keeps answering from its local knowledge base.
+    if (!consume('global:chat-gemini', chatDailyLimit(), 24 * 60 * 60 * 1000)) return json({ reply: null });
 
     try {
       const response = await ai.models.generateContent({

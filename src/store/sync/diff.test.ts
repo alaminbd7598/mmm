@@ -2,8 +2,8 @@
 // `npm test` (which globs src/utils and src/server) picks them up.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { SyncOp } from '../contracts';
-import { chunkOps, computeOps, deepEqual, fullReplaceOps, publicOpsOnly } from '../../store/sync/diff';
+import type { SyncOp } from '../../server/contracts';
+import { chunkOps, computeOps, deepEqual, fullReplaceOps, publicOpsOnly } from './diff';
 
 const news = (id: string, text = id) => ({ id, text, active: true, createdAt: '2026-01-01' });
 

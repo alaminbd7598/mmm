@@ -4,6 +4,7 @@ import {
   CareerJobCircular,
   LeadStatus,
 } from '../types/cms';
+import { isGoogleMapsEmbedUrl } from './safeUrl';
 
 export const DEFAULT_BOYS_CAMPUS_MAP_URL = 'https://maps.app.goo.gl/SxcrUPWtW8VbSYdEA';
 export const DEFAULT_BOYS_CAMPUS_EMBED_URL =
@@ -26,9 +27,9 @@ export function resolveGoogleMapsEmbedUrl(
   const raw = (rawUrlOrQuery || '').trim();
   if (!raw) return fallbackEmbedUrl;
 
-  // Already an embed URL
+  // Already an embed URL: accepted only from Google's own hosts, never from an arbitrary site.
   if (raw.includes('/maps/embed') || raw.includes('output=embed')) {
-    return raw;
+    return isGoogleMapsEmbedUrl(raw) ? raw : fallbackEmbedUrl;
   }
 
   // Known verified Maharat Boys & Main Campus short link

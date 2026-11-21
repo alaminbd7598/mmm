@@ -1,5 +1,5 @@
 /** Demo-mode DataStore: the seed state held in process memory. Writes last until the process restarts. */
-import type { DataStore, StateSnapshot, StoredCandidateAuth, StoredUserAuth, SyncOp } from '../contracts';
+import type { ApplyOpsResult, DataStore, StateSnapshot, StoredCandidateAuth, StoredUserAuth, SyncOp } from '../contracts';
 import type { ApplyOpsOptions } from './documents';
 import {
   applyOpsToMemory,
@@ -9,6 +9,7 @@ import {
   findUserAuthByUsername,
   memorySnapshotState,
   type MemoryData,
+  type UserAuthState,
 } from './memory-state';
 import type { SeedPlan } from './seed';
 import { StoreNotFoundError } from './errors';
@@ -45,11 +46,12 @@ export class MemoryStore implements DataStore {
     return { version: this.data.version, updatedAt: this.data.updatedAt, state: memorySnapshotState(this.data) };
   }
 
-  async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<{ version: number; updatedAt: string }> {
+  async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<ApplyOpsResult> {
     await this.init();
+    const conflicts: number[] = [];
     // Synchronous swap: concurrent callers cannot interleave inside one call.
-    this.data = applyOpsToMemory(this.data, ops, opts);
-    return { version: this.data.version, updatedAt: this.data.updatedAt };
+    this.data = applyOpsToMemory(this.data, ops, opts, undefined, true, conflicts);
+    return { version: this.data.version, updatedAt: this.data.updatedAt, ...(conflicts.length ? { conflicts } : {}) };
   }
 
   async getUserAuthByUsername(username: string): Promise<StoredUserAuth | null> {
@@ -62,12 +64,23 @@ export class MemoryStore implements DataStore {
     return findUserAuthById(this.data, id);
   }
 
-  async setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<void> {
-    await this.init();
+  private writeUserAuth(id: string, change: (previous: UserAuthState) => UserAuthState): number {
     if (!this.data.collections.users.some((u) => u.id === id)) throw new StoreNotFoundError('User not found.');
     const userAuth = new Map(this.data.userAuth);
-    userAuth.set(id, { passwordHash, mustChangePassword });
+    const next = change(userAuth.get(id) ?? { passwordHash: null, mustChangePassword: false, sessionVersion: 0 });
+    userAuth.set(id, next);
     this.data = { ...this.data, userAuth };
+    return next.sessionVersion;
+  }
+
+  async setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<number> {
+    await this.init();
+    return this.writeUserAuth(id, (prev) => ({ passwordHash, mustChangePassword, sessionVersion: prev.sessionVersion + 1 }));
+  }
+
+  async bumpUserSessionVersion(id: string): Promise<number> {
+    await this.init();
+    return this.writeUserAuth(id, (prev) => ({ ...prev, sessionVersion: prev.sessionVersion + 1 }));
   }
 
   async getCandidateAuthByEmail(email: string): Promise<StoredCandidateAuth | null> {
@@ -75,13 +88,16 @@ export class MemoryStore implements DataStore {
     return findCandidateAuthByEmail(this.data, email);
   }
 
-  async setCandidatePassword(id: string, passwordHash: string): Promise<void> {
+  async bumpCandidateSessionVersion(id: string): Promise<number> {
     await this.init();
     if (!this.data.collections.careerCandidates.some((c) => c.id === id)) {
       throw new StoreNotFoundError('Candidate not found.');
     }
     const candidateAuth = new Map(this.data.candidateAuth);
-    candidateAuth.set(id, passwordHash);
+    const prev = candidateAuth.get(id) ?? { passwordHash: null, sessionVersion: 0 };
+    const next = { ...prev, sessionVersion: prev.sessionVersion + 1 };
+    candidateAuth.set(id, next);
     this.data = { ...this.data, candidateAuth };
+    return next.sessionVersion;
   }
 }

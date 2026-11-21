@@ -1,6 +1,7 @@
 import { requireStaffPermission } from '@/src/server/auth/session';
 import { HttpError, assertSameOrigin, handleError, json, rateLimit, readJson } from '@/src/server/http';
 import { getGenAI, getGeminiModel } from '@/src/server/ai/gemini';
+import { storageMode } from '@/src/server/db/store';
 import { parseModelJson } from '@/src/server/ai/json';
 import { EXTRACT_RESPONSE_SCHEMA, buildExtractionParts, extractRequestSchema } from '@/src/server/ai/institution-extract';
 
@@ -24,7 +25,8 @@ export async function POST(req: Request) {
       throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid document payload', 'BAD_REQUEST');
     }
 
-    const ai = getGenAI();
+    // Demo servers use public sample sign-ins, so they never spend the Gemini key on staff tools.
+    const ai = storageMode() === 'demo' ? null : getGenAI();
     if (!ai) return json({ aiExtracted: null, fallbackReason: 'NO_API_KEY' });
 
     const parts = buildExtractionParts(parsed.data);

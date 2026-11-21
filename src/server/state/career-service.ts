@@ -6,6 +6,7 @@ import { getJwtSecret } from '../auth/session-cookie';
 import type { CandidateSession } from '../contracts';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
+import { consume, resetLimit } from '../rate-limit';
 import {
   applicationsForCandidate,
   findCandidate,
@@ -52,19 +53,27 @@ export async function registerCandidate(input: {
   const passwordHash = await hashPassword(input.password);
   await store.applyOps(ops, { candidatePasswordHashes: { [id]: passwordHash } });
 
-  const session: CandidateSession = { kind: 'candidate', candidateId: id, email: profile.email };
+  const session: CandidateSession = { kind: 'candidate', candidateId: id, email: profile.email, sv: 0 };
   await createCandidateSession(await cookies(), session);
   return { ok: true, candidate: profile, applications: [] };
 }
 
-export async function loginCandidate(email: string, password: string): Promise<CandidateResponse> {
+export async function loginCandidate(
+  email: string,
+  password: string,
+  throttle?: { failureKey: string; limit: number; windowMs: number }
+): Promise<CandidateResponse> {
   const store = await getStore();
   getJwtSecret(store.mode);
   const auth = await store.getCandidateAuthByEmail(email);
   const passwordOk = await verifyPassword(password, auth?.passwordHash);
-  if (!auth || !passwordOk) throw new HttpError(401, 'Invalid email or password.', 'INVALID_CREDENTIALS');
+  if (!auth || !passwordOk) {
+    if (throttle) consume(throttle.failureKey, throttle.limit, throttle.windowMs);
+    throw new HttpError(401, 'Invalid email or password.', 'INVALID_CREDENTIALS');
+  }
+  if (throttle) resetLimit(throttle.failureKey);
 
-  const session: CandidateSession = { kind: 'candidate', candidateId: auth.id, email: auth.email };
+  const session: CandidateSession = { kind: 'candidate', candidateId: auth.id, email: auth.email, sv: auth.sessionVersion };
   await createCandidateSession(await cookies(), session);
   return candidateResponse(session);
 }

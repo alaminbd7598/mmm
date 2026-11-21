@@ -25,8 +25,8 @@ export async function getCandidateSession(): Promise<CandidateSession | null> {
   const claims = await verifyCandidateToken(token, getJwtSecret(store.mode));
   if (!claims) return null;
   const account = await store.getCandidateAuthByEmail(claims.email);
-  if (!account || account.id !== claims.candidateId) return null;
-  return { kind: 'candidate', candidateId: account.id, email: account.email };
+  if (!account || account.id !== claims.candidateId || account.sessionVersion !== claims.sv) return null;
+  return { kind: 'candidate', candidateId: account.id, email: account.email, sv: account.sessionVersion };
 }
 
 export async function requireCandidate(): Promise<CandidateSession> {

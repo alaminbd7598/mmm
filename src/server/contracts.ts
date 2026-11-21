@@ -68,8 +68,6 @@ export const COLLECTION_KEYS = [
 export type SingletonKey = (typeof SINGLETON_KEYS)[number];
 export type CollectionKey = (typeof COLLECTION_KEYS)[number];
 
-export const isSingletonKey = (k: string): k is SingletonKey =>
-  (SINGLETON_KEYS as readonly string[]).includes(k);
 export const isCollectionKey = (k: string): k is CollectionKey =>
   (COLLECTION_KEYS as readonly string[]).includes(k);
 
@@ -78,13 +76,12 @@ export const isCollectionKey = (k: string): k is CollectionKey =>
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A signed-in staff member may write a key when their role has the needed action on ANY listed
- * resource (see hasRolePermission in src/utils/cmsLogic.ts, evaluated with the stored rbacMatrix).
- * Roles with `edit` on a WILDCARD resource ('backup-ai' restore, 'releases' rollback) may write
- * every key except `users` and `rbacMatrix`, which stay Super Admin only.
- *
- * The data-layer / sync agent verifies this table against the admin components that call each
- * store action and corrects it if a tab writes a key not listed here.
+ * A signed-in staff member may read a key when their role has `view` on ANY listed resource, and
+ * may write it when the role has the needed action on ANY listed resource (see hasRolePermission
+ * in src/utils/cmsLogic.ts, evaluated with the stored rbacMatrix). Changing or deleting existing
+ * data additionally requires being allowed to read the key. There is no blanket grant: backup
+ * restore, factory reset and release rollback only touch the keys the role may fully manage.
+ * `users` and `rbacMatrix` stay Super Admin only.
  */
 export const RESOURCES_FOR_KEY: Record<StateKey, AdminTabId[]> = {
   settings: ['settings', 'branding', 'seo-meta'],
@@ -110,7 +107,7 @@ export const RESOURCES_FOR_KEY: Record<StateKey, AdminTabId[]> = {
   notices: ['notices', 'ai-publisher'],
   courses: ['courses'],
   events: ['events', 'ai-publisher'],
-  leads: ['leads', 'tokens'],
+  leads: ['leads'],
   emails: ['emails', 'leads'],
   users: ['users'],
   rbacMatrix: ['users'],
@@ -128,7 +125,6 @@ export const RESOURCES_FOR_KEY: Record<StateKey, AdminTabId[]> = {
   virtualOfficeSessions: ['virtual-office'],
 };
 
-export const WILDCARD_RESOURCES: AdminTabId[] = ['backup-ai', 'releases'];
 export const SUPER_ADMIN_ONLY_KEYS: StateKey[] = ['users', 'rbacMatrix'];
 
 /**
@@ -143,7 +139,6 @@ export const SELF_EDITABLE_USER_FIELDS = [
   'bio',
   'photoUrl',
   'signatureDataUrl',
-  'signatorySlot',
   'googleEmail',
 ] as const;
 
@@ -190,29 +185,41 @@ export interface PublicSignatory {
 // 4. Sync operations (client store -> server)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * `base` (on set / upsert / delete) is the state version in which the sender last saw the target
+ * document; it overrides the request's `baseVersion` for that op. When the stored document was
+ * changed after that version by someone else, the op is refused as a conflict instead of silently
+ * overwriting the other change.
+ */
 export type SyncOp =
   /** Replace a singleton document. */
-  | { op: 'set'; key: SingletonKey; value: Record<string, unknown> }
+  | { op: 'set'; key: SingletonKey; value: Record<string, unknown>; base?: number }
   /** Insert or replace one collection item (matched by item.id). */
-  | { op: 'upsert'; key: CollectionKey; item: { id: string } & Record<string, unknown> }
+  | { op: 'upsert'; key: CollectionKey; item: { id: string } & Record<string, unknown>; base?: number }
   /** Delete one collection item. */
-  | { op: 'delete'; key: CollectionKey; id: string }
+  | { op: 'delete'; key: CollectionKey; id: string; base?: number }
   /** Persist the display order of a collection (ids in array order; unknown ids are ignored). */
   | { op: 'order'; key: CollectionKey; ids: string[] }
   /** Replace a whole collection (backup restore / reset / release rollback). */
   | { op: 'replace'; key: CollectionKey; items: Array<{ id: string } & Record<string, unknown>> };
 
 export interface SyncRequest {
-  /** Version the client last saw. Informational; writes are merged per item (last write wins per item). */
+  /**
+   * State version the client last loaded. A set / upsert / delete whose stored target was changed
+   * after this version (or after the op's own `base`) is rejected with a `CONFLICT:` reason.
+   */
   baseVersion: number;
   ops: SyncOp[];
 }
+
+/** Start of the `rejected[].reason` of an op refused because someone else changed its target first. */
+export const CONFLICT_REASON_PREFIX = 'CONFLICT:';
 
 export interface SyncResponse {
   ok: boolean;
   version: number;
   updatedAt: string;
-  /** Ops refused by RBAC or validation, with reasons; the rest were applied atomically. */
+  /** Ops refused by RBAC, validation or a conflict, with reasons; the rest were applied atomically. */
   rejected?: Array<{ index: number; reason: string }>;
   error?: string;
 }
@@ -231,12 +238,15 @@ export interface StoredUserAuth {
   passwordHash: string | null;
   mustChangePassword: boolean;
   disabled?: boolean;
+  /** Incremented on password change, admin reset and logout; sessions carrying an older value are void. */
+  sessionVersion: number;
 }
 
 export interface StoredCandidateAuth {
   id: string;
   email: string;
   passwordHash: string | null;
+  sessionVersion: number;
 }
 
 export interface StateSnapshot {
@@ -257,6 +267,19 @@ export interface ApplyOpsOptions {
    * (new accounts and resets through sync) pass `true` so the user must pick their own.
    */
   mustChangePassword?: Record<string, boolean>;
+  /**
+   * Enables conflict detection (staff sync): a set / upsert-of-existing / delete is skipped and
+   * reported in `conflicts` when its stored target was last written in a version newer than the
+   * op's `base` (or this value). Omitted for server-originated writes, which always apply.
+   */
+  baseVersion?: number;
+}
+
+export interface ApplyOpsResult {
+  version: number;
+  updatedAt: string;
+  /** Indexes (into the ops array) of ops skipped because of a conflict. */
+  conflicts?: number[];
 }
 
 export interface DataStore {
@@ -272,12 +295,16 @@ export interface DataStore {
    * (use the auth module) and passed via `passwordHashes` keyed by item id; the store strips any
    * `password`/`passwordHash` keys from the stored JSON documents.
    */
-  applyOps(ops: SyncOp[], opts?: ApplyOpsOptions): Promise<{ version: number; updatedAt: string }>;
+  applyOps(ops: SyncOp[], opts?: ApplyOpsOptions): Promise<ApplyOpsResult>;
   getUserAuthByUsername(username: string): Promise<StoredUserAuth | null>;
   getUserAuthById(id: string): Promise<StoredUserAuth | null>;
-  setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<void>;
+  /** Stores the hash and revokes the user's existing sessions. Returns the new session version. */
+  setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<number>;
+  /** Revokes the user's existing sessions (logout). Returns the new session version. */
+  bumpUserSessionVersion(id: string): Promise<number>;
   getCandidateAuthByEmail(email: string): Promise<StoredCandidateAuth | null>;
-  setCandidatePassword(id: string, passwordHash: string): Promise<void>;
+  /** Revokes the candidate's existing sessions (logout). */
+  bumpCandidateSessionVersion(id: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -293,12 +320,15 @@ export interface StaffSession {
   username: string;
   role: AdminRole;
   mustChangePassword: boolean;
+  /** The account's sessionVersion when the token was issued. */
+  sv: number;
 }
 
 export interface CandidateSession {
   kind: 'candidate';
   candidateId: string;
   email: string;
+  sv: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -316,6 +346,13 @@ export interface StateResponse {
   state: Partial<CMSState>;
   /** Present for staff: the signed-in user (no password data). */
   me?: SafeUser;
+  /** Demo mode with the sample admin enabled only: the sample sign-ins shown on the login page. */
+  demoAccounts?: DemoAccount[];
+}
+
+export interface DemoAccount {
+  username: string;
+  password: string;
 }
 
 /** GET /api/state/meta -> cheap polling endpoint. */
@@ -359,6 +396,7 @@ export interface PublicSubmitResponse {
   /** Server-assigned ids, in request order (the server may merge a lead into an existing one). */
   ids?: string[];
   error?: string;
+  code?: string;
 }
 
-export const MIN_PASSWORD_LENGTH = 8;
+export const MIN_PASSWORD_LENGTH = 10;

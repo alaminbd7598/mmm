@@ -19,6 +19,7 @@ import {
 import { useCMS } from '../store/useCMSStore';
 import { BlogPostItem } from '../types/cms';
 import { localizeDigits } from '../utils/i18nContent';
+import { safeImageUrl, safeLinkUrl } from '../utils/safeUrl';
 
 type Lang = 'bn' | 'en' | 'ar';
 
@@ -56,22 +57,6 @@ const formatDate = (value: string, lang: Lang): string => {
 const readingMinutes = (markdown: string): number => {
   const words = markdown.replace(/[#*_>`\-\[\]()]/g, ' ').split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / 180));
-};
-
-/** Only http(s), mailto and same-site paths/anchors survive; everything else is dropped. */
-const safeLinkUrl = (url: string): string => {
-  const u = (url || '').trim();
-  if (/^(https?:\/\/|mailto:)/i.test(u)) return u;
-  if (/^\/(?!\/)/.test(u) || u.startsWith('#')) return u;
-  return '';
-};
-
-const safeImageUrl = (url: string): string => {
-  const u = (url || '').trim();
-  if (/^https?:\/\//i.test(u) || /^\/(?!\/)/.test(u)) return u;
-  // Same inline raster formats the admin editor accepts (AdminBlogTab), so saved covers stay visible.
-  if (/^data:image\/(png|jpe?g|webp|gif|avif);base64,/i.test(u)) return u;
-  return '';
 };
 
 const isExternalHref = (href: string): boolean => {

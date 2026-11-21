@@ -11,7 +11,8 @@
  * (items missing from the file are deleted). Keys absent from the file are left untouched.
  *
  * Plaintext user / candidate passwords are bcrypt-hashed (cost 12) and those users must change
- * their password at next login. Users without a password keep their stored hash.
+ * their password at next login. Users without a password keep their stored hash. User passwords
+ * that fail the password policy (including the public legacy defaults) are skipped.
  * Prints counts per key only, never record contents.
  */
 import { readFile } from 'node:fs/promises';
@@ -21,6 +22,7 @@ import { z } from 'zod';
 import { COLLECTION_KEYS, SINGLETON_KEYS, type StateKey } from '../src/server/contracts';
 import type { CMSState } from '../src/types/cms';
 import { getStore } from '../src/server/db/store';
+import { validateNewPassword } from '../src/server/auth/password';
 import { BCRYPT_COST } from '../src/server/db/seed';
 import { plaintextPasswords, stateToOps, summarizeOps } from '../src/server/db/state-ops';
 
@@ -96,7 +98,17 @@ async function main(): Promise<void> {
   }
   const { state, ignored } = validateState(unwrap(parsed));
 
+  // Passwords that fail the policy (e.g. the legacy defaults, which are public) are not imported:
+  // those accounts keep their stored password, or stay locked until a Super Admin sets one.
+  const usernames = new Map((state.users || []).map((u) => [u.id, u.username]));
   const userPasswords = plaintextPasswords(state, 'users');
+  let skippedWeak = 0;
+  for (const [id, password] of userPasswords) {
+    if (!validateNewPassword(password, usernames.get(id)).ok) {
+      userPasswords.delete(id);
+      skippedWeak += 1;
+    }
+  }
   const [passwordHashes, candidatePasswordHashes] = await Promise.all([
     hashAll(userPasswords),
     hashAll(plaintextPasswords(state, 'careerCandidates')),
@@ -120,6 +132,7 @@ async function main(): Promise<void> {
   }
   if (ignored.length) console.log(`  ignored unknown keys: ${ignored.join(', ')}`);
   console.log(`  user passwords hashed: ${Object.keys(passwordHashes).length} (must change at next login)`);
+  if (skippedWeak) console.log(`  user passwords skipped (too weak or a known default): ${skippedWeak}`);
   console.log(`  candidate passwords hashed: ${Object.keys(candidatePasswordHashes).length}`);
   if (usersWithoutAnyHash.length) {
     console.log(`  users without a password (cannot sign in until one is set): ${usersWithoutAnyHash.length}`);

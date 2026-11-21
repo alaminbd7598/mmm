@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
 import type { AdminUser } from '../types/cms';
+import { safeImageUrl } from '../utils/safeUrl';
 
 type SignatorySlot = NonNullable<AdminUser['signatorySlot']>;
 
@@ -117,10 +118,7 @@ const toSignaturePng = (dataUrl: string) =>
   });
 
 /** Photo links may be https/http, a site-relative asset path, or an inline raster image. */
-const isSafePhotoUrl = (value: string) =>
-  /^https?:\/\/[^\s]+$/i.test(value) ||
-  /^\/(?!\/)[^\s]*$/.test(value) ||
-  /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(value);
+const isSafePhotoUrl = (value: string) => !/\s/.test(value) && safeImageUrl(value) !== '';
 
 const ROLE_LABELS: Record<string, [string, string, string]> = {
   'Super Admin': ['সুপার অ্যাডমিন', 'Super Admin', 'المشرف العام'],
