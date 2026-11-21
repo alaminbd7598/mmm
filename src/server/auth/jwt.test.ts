@@ -4,6 +4,7 @@ import type { CandidateSession, StaffSession } from '../contracts';
 import {
   demoAdminEnabled,
   demoJwtSecret,
+  loginSetupIssue,
   STAFF_SESSION_TTL_SECONDS,
   modeFromEnv,
   resolveJwtSecret,
@@ -117,4 +118,21 @@ test('the demo admin is closed in production unless DEMO_MODE=1', () => {
   assert.equal(demoAdminEnabled({ NODE_ENV: 'production', DEMO_MODE: '1' }), true);
   assert.equal(demoAdminEnabled({ NODE_ENV: 'development' }), true);
   assert.equal(demoAdminEnabled({}), true);
+});
+
+test('loginSetupIssue names the missing setting', () => {
+  const secret = 'x'.repeat(40);
+  assert.equal(loginSetupIssue('database', false, { JWT_SECRET: secret }), null);
+  assert.equal(loginSetupIssue('database', true, { JWT_SECRET: secret }), 'ADMIN_BOOTSTRAP_PASSWORD');
+  assert.equal(loginSetupIssue('database', true, { JWT_SECRET: 'short' }), 'JWT_SECRET');
+  assert.equal(loginSetupIssue('demo', false, { NODE_ENV: 'production' }), 'DATABASE_URL');
+  assert.equal(loginSetupIssue('demo', false, { NODE_ENV: 'production', DEMO_MODE: '1' }), null);
+  assert.equal(loginSetupIssue('demo', false, { NODE_ENV: 'development' }), null);
+});
+
+test('the demo signing key is random per process, not a constant', () => {
+  const key = demoJwtSecret();
+  assert.equal(key.length, 48);
+  assert.equal(demoJwtSecret(), key);
+  assert.ok(new Set(key).size > 8, 'key bytes look random');
 });

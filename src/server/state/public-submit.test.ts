@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AdmissionLead, CMSState } from '../../types/cms';
 import type { SyncOp } from '../contracts';
-import { planPublicSubmit, type PublicSubmitContext } from './public-submit';
+import { countUploads, planPublicSubmit, storedUploadChars, type PublicSubmitContext } from './public-submit';
 import { parsePublicSubmit, type PublicItemInput } from './validate';
 
 function ctx(candidate: PublicSubmitContext['candidate'] = null): PublicSubmitContext {
@@ -198,4 +198,23 @@ test('phones in Bengali digits and landlines are accepted; junk is not', () => {
   assert.ok(lead('02-8912345').ok);
   assert.equal(lead('abcdef').ok, false);
   assert.equal(lead('12345').ok, false);
+});
+
+test('upload accounting counts inline files only', () => {
+  const png = `data:image/png;base64,${'A'.repeat(400)}`;
+  const pdf = `data:application/pdf;base64,${'A'.repeat(800)}`;
+  const submitted = items([
+    { key: 'leads', item: { name: 'A', phone: '01711000001', source: 'Full Admission Form', detailedData: { studentPhotoUrl: png } } },
+    { key: 'leads', item: { name: 'B', phone: '01711000002', source: 'Quick Inquiry' } },
+    { key: 'careerApplications', item: { jobId: 'job-1', applicantName: 'Ali', phone: '01711000003', email: 'a@x.test', educationBn: 'BA', cvFileDataUrl: pdf } },
+    { key: 'careerApplications', item: { jobId: 'job-1', applicantName: 'Ali', phone: '01711000003', email: 'a@x.test', educationBn: 'BA', cvFileDataUrl: 'https://example.org/cv.pdf' } },
+  ]);
+  assert.deepEqual(countUploads(submitted), { files: 2, chars: png.length + pdf.length });
+
+  const stored = {
+    leads: [{ id: 'l1', detailedData: { studentPhotoUrl: png } }, { id: 'l2' }],
+    careerApplications: [{ id: 'a1', cvFileDataUrl: pdf }, { id: 'a2', cvFileDataUrl: 'https://example.org/cv.pdf' }],
+  } as unknown as CMSState;
+  assert.equal(storedUploadChars(stored), png.length + pdf.length);
+  assert.equal(storedUploadChars({} as CMSState), 0);
 });

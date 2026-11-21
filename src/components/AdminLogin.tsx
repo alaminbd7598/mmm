@@ -94,6 +94,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     language,
     storageMode,
     demoAccounts,
+    loginSetup,
     currentUser,
     mustChangePassword,
   } = useCMS();
@@ -120,6 +121,28 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
+
+  // Shown while the server cannot accept any sign-in, so the owner knows which setting to add.
+  const setupNotice =
+    loginSetup === 'ADMIN_BOOTSTRAP_PASSWORD'
+      ? tr(
+          'অ্যাডমিন পাসওয়ার্ড এখনো সেট করা হয়নি। হোস্টিং প্যানেলের Environment Variables-এ ADMIN_BOOTSTRAP_PASSWORD (কমপক্ষে ১২ অক্ষর; অক্ষর ও সংখ্যা মিলিয়ে) যোগ করে সাইটটি রিডিপ্লয় বা রিস্টার্ট করুন। এরপর ইউজার আইডি admin ও ওই পাসওয়ার্ড দিয়ে লগইন করে নিজের নতুন পাসওয়ার্ড ঠিক করুন।',
+          'No administrator password has been set yet. Add ADMIN_BOOTSTRAP_PASSWORD (at least 12 characters, with letters and digits) to the environment variables in your hosting panel, then redeploy or restart the site. After that, sign in as "admin" with that password and choose your own new password.',
+          'لم تُضبط كلمة مرور المسؤول بعد. أضف ADMIN_BOOTSTRAP_PASSWORD (12 حرفاً على الأقل، بأحرف وأرقام) إلى متغيرات البيئة في لوحة الاستضافة، ثم أعد نشر الموقع أو أعد تشغيله. بعد ذلك سجّل الدخول باسم المستخدم admin وبهذه الكلمة ثم اختر كلمة مرور جديدة خاصة بك.'
+        )
+      : loginSetup === 'JWT_SECRET'
+        ? tr(
+            'লগইন চালু করতে হোস্টিং প্যানেলের Environment Variables-এ JWT_SECRET (কমপক্ষে ৩২ অক্ষরের এলোমেলো মান) যোগ করে সাইটটি রিডিপ্লয় বা রিস্টার্ট করুন।',
+            'To enable sign-in, add JWT_SECRET (a random value of at least 32 characters) to the environment variables in your hosting panel, then redeploy or restart the site.',
+            'لتفعيل تسجيل الدخول، أضف JWT_SECRET (قيمة عشوائية من 32 حرفاً على الأقل) إلى متغيرات البيئة في لوحة الاستضافة، ثم أعد نشر الموقع أو أعد تشغيله.'
+          )
+        : loginSetup === 'DATABASE_URL'
+          ? tr(
+              'এই সার্ভারে কোনো ডাটাবেস সংযুক্ত নেই, তাই অ্যাডমিন লগইন বন্ধ আছে। হোস্টিং প্যানেলের Environment Variables-এ DATABASE_URL ও JWT_SECRET যোগ করে সাইটটি রিডিপ্লয় করুন। শুধু পরীক্ষামূলক ডেমো দেখাতে চাইলে DEMO_MODE=1 দিন।',
+              'No database is connected to this server, so admin sign-in is switched off. Add DATABASE_URL and JWT_SECRET to the environment variables in your hosting panel and redeploy the site. For a trial demo only, set DEMO_MODE=1 instead.',
+              'لا توجد قاعدة بيانات متصلة بهذا الخادم، لذلك تسجيل دخول الإدارة متوقف. أضف DATABASE_URL و JWT_SECRET إلى متغيرات البيئة في لوحة الاستضافة ثم أعد نشر الموقع. للعرض التجريبي فقط اضبط DEMO_MODE=1.'
+            )
+          : '';
 
   const externalPortals = resolveExternalPortals(state.settings.externalPortals).filter(
     (p) => p.active !== false && isValidExternalPortalUrl(p.url)
@@ -286,6 +309,15 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
             {/* Step 2: Credentials Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
+              {setupNotice && (
+                <div
+                  role="status"
+                  data-testid="login-setup-notice"
+                  className="rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200"
+                >
+                  {setupNotice}
+                </div>
+              )}
               {error && (
                 <div
                   role="alert"

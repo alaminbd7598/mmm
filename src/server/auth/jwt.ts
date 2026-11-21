@@ -5,7 +5,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { z } from 'zod';
 import { ADMIN_ROLES_LIST } from '../../types/cms';
-import type { CandidateSession, StaffSession, StorageMode } from '../contracts';
+import type { CandidateSession, LoginSetupIssue, StaffSession, StorageMode } from '../contracts';
 
 export const JWT_ISSUER = 'mmm';
 const STAFF_AUDIENCE = 'mmm:staff';
@@ -50,6 +50,20 @@ export function demoAdminEnabled(env: EnvLike = process.env): boolean {
 /** True when a valid JWT_SECRET is configured (demo mode otherwise uses a per-process key). */
 export function hasConfiguredJwtSecret(env: EnvLike = process.env): boolean {
   return (env.JWT_SECRET?.trim() || '').length >= MIN_JWT_SECRET_LENGTH;
+}
+
+/**
+ * The setting that keeps staff sign-in closed, or null when sign-in works. `adminPasswordPending`
+ * is the store's answer to "does no Super Admin have a password yet?" (database mode).
+ */
+export function loginSetupIssue(
+  mode: StorageMode,
+  adminPasswordPending: boolean,
+  env: EnvLike = process.env
+): LoginSetupIssue | null {
+  if (mode === 'demo') return demoAdminEnabled(env) ? null : 'DATABASE_URL';
+  if (!hasConfiguredJwtSecret(env)) return 'JWT_SECRET';
+  return adminPasswordPending ? 'ADMIN_BOOTSTRAP_PASSWORD' : null;
 }
 
 /**

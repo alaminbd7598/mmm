@@ -89,6 +89,7 @@ import {
   PRIVATE_KEYS,
   SINGLETON_KEYS,
   type DemoAccount,
+  type LoginSetupIssue,
   type SafeUser,
   type StateKey,
 } from '../server/contracts';
@@ -178,6 +179,8 @@ interface CMSContextType {
   storageMode: ClientStorageMode;
   /** Sample sign-ins offered by a demo server (empty otherwise). */
   demoAccounts: DemoAccount[];
+  /** The server setting still missing before staff can sign in (null when sign-in works). */
+  loginSetup: LoginSetupIssue | null;
   loginWithGoogleProfile: (profile: {
     email: string;
     displayName: string;
@@ -520,7 +523,7 @@ export const CMSProvider: React.FC<{
   }, []);
 
   const sync = useServerSync({ state, setState, onSession: handleSession, notify: pushToast, tr });
-  const { storageMode, liveSyncStatus, demoAccounts } = sync;
+  const { storageMode, liveSyncStatus, demoAccounts, loginSetup } = sync;
 
   const loginErrorMessage = (code: string, status: number, roleLabel: string): string => {
     switch (code) {
@@ -1043,6 +1046,13 @@ export const CMSProvider: React.FC<{
         'এই পদের জন্য এখন আর আবেদন গ্রহণ করা হচ্ছে না।',
         'This position is no longer accepting applications.',
         'لم يعد التقديم متاحاً لهذه الوظيفة.'
+      );
+    }
+    if (failure.code === 'UPLOADS_UNAVAILABLE') {
+      return tr(
+        'এই মুহূর্তে ফাইল আপলোড গ্রহণ করা যাচ্ছে না। অনুগ্রহ করে ফাইল ছাড়া জমা দিন অথবা অফিসে যোগাযোগ করুন।',
+        'File uploads cannot be accepted at the moment. Please submit without the file or contact the office.',
+        'لا يمكن استقبال الملفات حالياً. يرجى الإرسال بدون ملف أو التواصل مع المكتب.'
       );
     }
     if (failure.code === 'TOO_LARGE' || /photo|cv file|too large|too big/i.test(detail)) {
@@ -2795,6 +2805,7 @@ export const CMSProvider: React.FC<{
         changePassword,
         storageMode,
         demoAccounts,
+        loginSetup,
         loginWithGoogleProfile,
         updateCurrentUserProfile,
         logout,

@@ -1,4 +1,4 @@
-import { assertRateLimit, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
+import { assertRateLimit, assertSameOrigin, clientIp, handleError, json, readJson } from '@/src/server/http';
 import { runPublicSubmit } from '@/src/server/state/public-service';
 
 export const runtime = 'nodejs';
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   try {
     assertSameOrigin(req);
     assertRateLimit(req, 'public-submit', LIMIT, WINDOW_MS);
-    return json(await runPublicSubmit(await readJson(req, MAX_BODY_BYTES)));
+    return json(await runPublicSubmit(await readJson(req, MAX_BODY_BYTES), clientIp(req)));
   } catch (err) {
     return handleError(err);
   }

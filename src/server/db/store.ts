@@ -31,7 +31,8 @@ function createStore(): DataStore {
       createPrismaClient(url),
       () => buildSeedPlan('database'),
       async (store) => {
-        await ensureBootstrapPassword(store);
+        const outcome = await ensureBootstrapPassword(store);
+        return outcome === 'missing' || outcome === 'weak';
       }
     );
   }

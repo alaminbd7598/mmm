@@ -85,22 +85,54 @@ export function isUnsafeStoredString(value: string): boolean {
   return DATA_SCHEME_RE.test(value) && !STORABLE_DATA_RE.test(value.trimStart());
 }
 
+/** Field names that hold a URL (`logoUrl`, `groupLink`, `url`, `imageUrls`, ...). */
+const URL_FIELD_RE = /(url|uri|link|href|src)s?$/i;
+/** URL fields that end up in a link or an <iframe>: these never take inline data. */
+const LINK_OR_EMBED_FIELD_RE = /(embed|map|video|link|post|facebook|youtube|portal|canonical|room|zoom|href)/i;
+/** URL fields that may carry an uploaded document (CV, notice attachment). */
+const FILE_FIELD_RE = /(cv|file|document|attachment|pdf|prospectus)/i;
+const DOCUMENT_DATA_RE =
+  /^data:application\/(pdf|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)(;[a-z0-9-]+=[a-z0-9.+-]+)*;base64,/i;
+const EXPLICIT_SCHEME_RE = /^[\s\u0000-\u001f]*([a-z][a-z0-9+.-]*):/i;
+const LINK_SCHEMES: readonly string[] = ['http', 'https', 'mailto', 'tel'];
+
+export const isUrlFieldName = (field: string): boolean => URL_FIELD_RE.test(field);
+
 /**
- * Path (e.g. `settings.logoUrl`) of the first string anywhere inside `value` that carries a
- * script URL or a non-media data URL, or null when the document is clean.
+ * Whether `value` may be stored in the URL field `field`. Values without a scheme (same-site
+ * paths, anchors, plain file names) always pass. With a scheme only http(s), mailto and tel are
+ * accepted, plus inline data where it is expected: a raster image in image fields (never in link
+ * or embed fields) and a PDF / Word document in file fields.
  */
-export function findUnsafeString(value: unknown, path = ''): string | null {
-  if (typeof value === 'string') return isUnsafeStoredString(value) ? path || '(value)' : null;
+export function isAllowedUrlFieldValue(field: string, value: string): boolean {
+  const scheme = EXPLICIT_SCHEME_RE.exec(value)?.[1].toLowerCase();
+  if (!scheme || LINK_SCHEMES.includes(scheme)) return true;
+  if (scheme !== 'data' || LINK_OR_EMBED_FIELD_RE.test(field)) return false;
+  const data = value.trimStart();
+  return INLINE_IMAGE_RE.test(data) || (FILE_FIELD_RE.test(field) && DOCUMENT_DATA_RE.test(data));
+}
+
+/**
+ * Path (e.g. `settings.logoUrl`) of the first string anywhere inside `value` that may not be
+ * stored, or null when the document is clean: a script URL or non-media data URL in any field,
+ * or a URL field (see isAllowedUrlFieldValue) with a scheme or inline data it must not carry.
+ * `field` is the name of the property holding `value` (array items inherit their array's name).
+ */
+export function findUnsafeString(value: unknown, path = '', field = ''): string | null {
+  if (typeof value === 'string') {
+    const unsafe = isUnsafeStoredString(value) || (isUrlFieldName(field) && !isAllowedUrlFieldValue(field, value));
+    return unsafe ? path || '(value)' : null;
+  }
   if (!value || typeof value !== 'object') return null;
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i += 1) {
-      const found = findUnsafeString(value[i], `${path}[${i}]`);
+      const found = findUnsafeString(value[i], `${path}[${i}]`, field);
       if (found) return found;
     }
     return null;
   }
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    const found = findUnsafeString(child, path ? `${path}.${key}` : key);
+    const found = findUnsafeString(child, path ? `${path}.${key}` : key, key);
     if (found) return found;
   }
   return null;

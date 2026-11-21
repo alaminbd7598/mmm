@@ -4,7 +4,7 @@ import { normalizeAdminRole } from '@/src/utils/cmsLogic';
 import type { LoginResponse } from '@/src/server/contracts';
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
-import { UNKNOWN_CLIENT, clientIp, consume, isLimited, rateLimit, resetLimit } from '@/src/server/rate-limit';
+import { clientIp, consume, isLimited, rateLimitClient, resetLimit } from '@/src/server/rate-limit';
 import { demoAdminEnabled } from '@/src/server/auth/jwt';
 import { isSuperAdmin } from '@/src/server/state/permissions';
 import { verifyPassword } from '@/src/server/auth/password';
@@ -34,10 +34,9 @@ export async function POST(req: Request) {
     if (!parsed.success) throw new HttpError(400, 'Username and password are required.', 'BAD_REQUEST');
     const { username, password, expectedRole } = parsed.data;
 
-    const ip = clientIp(req);
     const userKey = `auth-login-user:${username.toLowerCase()}`;
-    // Requests without a trustworthy address are only limited per username (no shared IP bucket).
-    const ipAllowed = ip === UNKNOWN_CLIENT || rateLimit(`auth-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS);
+    // Checked first so password hashing (deliberately slow) cannot be triggered without bound.
+    const ipAllowed = rateLimitClient('auth-login-ip', clientIp(req), PER_IP_LIMIT, WINDOW_MS);
     if (!ipAllowed || isLimited(userKey, PER_USER_FAILURE_LIMIT)) {
       throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
     }

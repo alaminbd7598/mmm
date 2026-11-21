@@ -6,6 +6,7 @@
  */
 import { z } from 'zod';
 import { isValidEmail, isValidPhone, toAsciiDigits } from '../../utils/contactValidation';
+import { findUnsafeString, isAllowedUrlFieldValue } from '../../utils/safeUrl';
 import {
   COLLECTION_KEYS,
   PUBLIC_CREATE_KEYS,
@@ -234,7 +235,11 @@ export const publicCareerApplicationSchema = z.object({
   experienceYearsBn: text(200).default(''),
   expectedSalaryBn: optionalText(200),
   paymentTrxId: optionalText(100),
-  cvLinkOrFileName: optionalText(MAX_URL_LENGTH),
+  /** A link to the CV or just its file name; shown to HR as a link, so only web links are accepted. */
+  cvLinkOrFileName: optionalText(MAX_URL_LENGTH).refine(
+    (v) => v === undefined || isAllowedUrlFieldValue('cvLink', v),
+    'CV link must be an http(s) link or a file name.'
+  ),
   cvFileName: optionalText(255),
   cvFileDataUrl: cvFileSchema.optional(),
   coverLetterBn: optionalText(10_000),
@@ -269,6 +274,9 @@ export function parsePublicSubmit(body: unknown): { ok: true; items: PublicItemI
   for (const [index, entry] of envelope.data.items.entries()) {
     const parsed = PUBLIC_ITEM_SCHEMAS[entry.key].safeParse(entry.item);
     if (!parsed.success) return { ok: false, error: `items.${index}.${describeZodError(parsed.error)}` };
+    // Same storage rules as staff writes: no script URLs or HTML data URLs in any field.
+    const unsafe = findUnsafeString(parsed.data);
+    if (unsafe) return { ok: false, error: `items.${index}.${unsafe}: this value cannot be stored.` };
     items.push({ key: entry.key, item: parsed.data } as PublicItemInput);
   }
   return { ok: true, items };

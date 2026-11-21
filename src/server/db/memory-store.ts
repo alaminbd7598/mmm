@@ -1,6 +1,6 @@
 /** Demo-mode DataStore: the seed state held in process memory. Writes last until the process restarts. */
 import type { ApplyOpsResult, DataStore, StateSnapshot, StoredCandidateAuth, StoredUserAuth, SyncOp } from '../contracts';
-import type { ApplyOpsOptions } from './documents';
+import { deepFreeze, type ApplyOpsOptions } from './documents';
 import {
   applyOpsToMemory,
   emptyMemoryData,
@@ -18,6 +18,8 @@ export class MemoryStore implements DataStore {
   readonly mode = 'demo' as const;
   private data: MemoryData = emptyMemoryData(new Date().toISOString());
   private initPromise: Promise<void> | null = null;
+  /** Snapshot built from `source`; `data` is replaced (never mutated) on every write. */
+  private cached: { source: MemoryData; snapshot: StateSnapshot } | null = null;
 
   /** @param loadSeed produces the seed plan; injected so tests can use small fixtures. */
   constructor(private readonly loadSeed: () => Promise<SeedPlan>) {}
@@ -41,9 +43,20 @@ export class MemoryStore implements DataStore {
     return { version: this.data.version, updatedAt: this.data.updatedAt };
   }
 
+  /** The returned snapshot is shared and frozen: callers must copy before changing anything. */
   async getSnapshot(): Promise<StateSnapshot> {
     await this.init();
-    return { version: this.data.version, updatedAt: this.data.updatedAt, state: memorySnapshotState(this.data) };
+    const source = this.data;
+    if (this.cached?.source !== source) {
+      const snapshot = deepFreeze({ version: source.version, updatedAt: source.updatedAt, state: memorySnapshotState(source) });
+      this.cached = { source, snapshot };
+    }
+    return this.cached.snapshot;
+  }
+
+  /** Demo accounts are seeded with their sample passwords. */
+  async adminPasswordPending(): Promise<boolean> {
+    return false;
   }
 
   async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<ApplyOpsResult> {

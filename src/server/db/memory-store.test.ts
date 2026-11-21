@@ -241,3 +241,19 @@ test('conflict detection: a document changed after the sender\'s base version is
   const server = await store.applyOps([{ op: 'upsert', key: 'notices', item: item('server') }]);
   assert.equal(server.conflicts, undefined);
 });
+
+test('MemoryStore snapshots are cached per version, frozen, and rebuilt after a write', async () => {
+  const store = new MemoryStore(fixturePlan);
+  const first = await store.getSnapshot();
+  assert.equal(await store.getSnapshot(), first);
+  assert.ok(Object.isFrozen(first.state) && Object.isFrozen(first.state.users[0]));
+  assert.throws(() => {
+    (first.state.users[0] as { fullName: string }).fullName = 'changed';
+  }, TypeError);
+  await store.applyOps([{ op: 'upsert', key: 'news', item: { id: 'n1', text: 'new' } }]);
+  const second = await store.getSnapshot();
+  assert.notEqual(second, first);
+  assert.equal(second.version, 2);
+  assert.equal(second.state.news.length, 1);
+  assert.equal(await store.adminPasswordPending(), false);
+});

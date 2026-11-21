@@ -1,5 +1,5 @@
 import { HttpError, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
-import { UNKNOWN_CLIENT, clientIp, isLimited, rateLimit } from '@/src/server/rate-limit';
+import { clientIp, isLimited, rateLimitClient } from '@/src/server/rate-limit';
 import { loginCandidate } from '@/src/server/state/career-service';
 import { candidateLoginSchema } from '@/src/server/state/validate';
 
@@ -19,9 +19,8 @@ export async function POST(req: Request) {
     if (!parsed.success) throw new HttpError(400, 'Email and password are required.', 'BAD_REQUEST');
     const { email, password } = parsed.data;
 
-    const ip = clientIp(req);
     const accountKey = `career-login-account:${email}`;
-    const ipAllowed = ip === UNKNOWN_CLIENT || rateLimit(`career-login-ip:${ip}`, PER_IP_LIMIT, WINDOW_MS);
+    const ipAllowed = rateLimitClient('career-login-ip', clientIp(req), PER_IP_LIMIT, WINDOW_MS);
     if (!ipAllowed || isLimited(accountKey, CAREER_LOGIN_FAILURE_LIMIT)) {
       throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
     }

@@ -5,56 +5,77 @@ import { getStore } from '../db/store';
 import { HttpError } from '../http';
 import { findPublicTokenMatch, planTokenApply, type ContactQuery, type PublicTokenMatch } from './admission-token';
 import { formatDisplayTimestamp, newId } from './ids';
-import { planPublicSubmit } from './public-submit';
+import { countUploads, planPublicSubmit, storedUploadChars } from './public-submit';
 import { parsePublicSubmit, type PublicItemInput } from './validate';
 import { normalizePhoneNumber } from '../../utils/cmsLogic';
-import { consume } from '../rate-limit';
+import { GLOBAL_PREFIX, UNKNOWN_CLIENT, consume } from '../rate-limit';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 /** Records one phone number may create per hour (a family registering several children fits easily). */
 const PER_PHONE_HOURLY_LIMIT = 8;
-/** All anonymous submissions per day, and the inline files (photos, CVs) they may carry. */
+/** Inline files (student photos, CVs) one client address may upload per day, and their total size. */
+export const PER_CLIENT_DAILY_UPLOADS = 12;
+const PER_CLIENT_DAILY_UPLOAD_BYTES = 24 * 1024 * 1024;
+/** All anonymous submissions per day, and the inline files they may carry. */
 const GLOBAL_DAILY_SUBMISSIONS = 2000;
 const GLOBAL_DAILY_UPLOAD_BYTES = 150 * 1024 * 1024;
+/**
+ * Ceiling for inline files kept in visitor-created records (base64 characters). They live in the
+ * database and in the cached snapshot, so beyond this size new files are refused until staff
+ * delete old applications; submissions without a file are still accepted.
+ */
+export const MAX_STORED_UPLOAD_CHARS = 400 * 1024 * 1024;
 
 const tooMany = () => new HttpError(429, 'Too many submissions. Please try again later.', 'RATE_LIMITED');
 
 /**
- * Caps that do not depend on the client address: per phone number, and site-wide per day for the
- * number of submissions and the bytes of uploaded files, so anonymous traffic cannot fill the
- * database however many addresses it comes from.
+ * Caps on anonymous submissions: per phone number, per client address for uploaded files, and
+ * site-wide per day for the number of submissions and the size of uploaded files, so anonymous
+ * traffic cannot fill the database however many addresses it comes from.
  */
-function assertSubmissionBudget(items: readonly PublicItemInput[]): void {
-  let uploadBytes = 0;
+function assertSubmissionBudget(items: readonly PublicItemInput[], clientAddress: string): void {
   const phones = new Set<string>();
   for (const entry of items) {
     if (entry.key === 'emails') continue;
     const phone = normalizePhoneNumber(entry.item.phone || '');
     if (phone) phones.add(phone);
-    if (entry.key === 'leads') uploadBytes += entry.item.detailedData?.studentPhotoUrl?.length ?? 0;
-    if (entry.key === 'careerApplications') uploadBytes += entry.item.cvFileDataUrl?.length ?? 0;
   }
   for (const phone of phones) {
     if (!consume(`public-submit-phone:${phone}`, PER_PHONE_HOURLY_LIMIT, HOUR_MS)) throw tooMany();
   }
-  if (!consume('public-submit-global', GLOBAL_DAILY_SUBMISSIONS, DAY_MS, items.length)) throw tooMany();
-  if (uploadBytes > 0 && !consume('public-submit-upload-bytes', GLOBAL_DAILY_UPLOAD_BYTES, DAY_MS, uploadBytes)) {
-    throw tooMany();
+  if (!consume(`${GLOBAL_PREFIX}public-submit`, GLOBAL_DAILY_SUBMISSIONS, DAY_MS, items.length)) throw tooMany();
+
+  const uploads = countUploads(items);
+  if (uploads.files === 0) return;
+  // Without a trustworthy address every visitor would share these two counters; the site-wide caps below still apply.
+  if (clientAddress !== UNKNOWN_CLIENT) {
+    const withinCount = consume(`public-upload-count:${clientAddress}`, PER_CLIENT_DAILY_UPLOADS, DAY_MS, uploads.files);
+    const withinBytes = consume(`public-upload-bytes:${clientAddress}`, PER_CLIENT_DAILY_UPLOAD_BYTES, DAY_MS, uploads.chars);
+    if (!withinCount || !withinBytes) throw tooMany();
   }
+  if (!consume(`${GLOBAL_PREFIX}public-upload-bytes`, GLOBAL_DAILY_UPLOAD_BYTES, DAY_MS, uploads.chars)) throw tooMany();
 }
 
-/** POST /api/public/submit after origin, size and rate checks. */
-export async function runPublicSubmit(rawBody: unknown): Promise<PublicSubmitResponse> {
+/** POST /api/public/submit after origin, size and rate checks. `clientAddress` comes from clientIp(). */
+export async function runPublicSubmit(rawBody: unknown, clientAddress: string): Promise<PublicSubmitResponse> {
   const parsed = parsePublicSubmit(rawBody);
   if (!parsed.ok) throw new HttpError(400, `Invalid submission: ${parsed.error}`, 'BAD_REQUEST');
-  assertSubmissionBudget(parsed.items);
+  assertSubmissionBudget(parsed.items, clientAddress);
 
   const store = await getStore();
   const [snapshot, candidate] = await Promise.all([
     store.getSnapshot(),
     parsed.items.some((i) => i.key === 'careerApplications') ? getCandidateSession().catch(() => null) : null,
   ]);
+  const uploads = countUploads(parsed.items);
+  if (uploads.files > 0 && storedUploadChars(snapshot.state) + uploads.chars > MAX_STORED_UPLOAD_CHARS) {
+    throw new HttpError(
+      507,
+      'File uploads are not available at the moment. Please submit without the file.',
+      'UPLOADS_UNAVAILABLE'
+    );
+  }
   const now = new Date();
   const plan = planPublicSubmit(parsed.items, snapshot.state, {
     now,

@@ -21,9 +21,9 @@ import {
   type StateKey,
 } from '../contracts';
 import { canViewKey, canWriteKey, isSuperAdmin } from './permissions';
+import { isSignatorySlot } from './signatories';
 
 const ALL_KEYS: readonly StateKey[] = [...SINGLETON_KEYS, ...COLLECTION_KEYS];
-const SIGNATORY_SLOTS = ['chairman', 'principal', 'coordinator'] as const;
 const CREDENTIAL_FIELDS = ['password', 'passwordHash', 'mustChangePassword'] as const;
 
 type Mutable = Record<string, unknown>;
@@ -33,9 +33,6 @@ function withoutCredentials<T extends object>(item: T): Omit<T, 'password'> {
   for (const field of CREDENTIAL_FIELDS) delete copy[field];
   return copy as Omit<T, 'password'>;
 }
-
-const isSignatorySlot = (slot: unknown): slot is PublicSignatory['signatorySlot'] =>
-  (SIGNATORY_SLOTS as readonly unknown[]).includes(slot);
 
 /** The certificate/token signatories: the only user data anonymous visitors receive. */
 export function toPublicSignatories(users: readonly AdminUser[] | undefined): PublicSignatory[] {

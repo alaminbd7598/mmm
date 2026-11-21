@@ -1,7 +1,8 @@
 /**
  * Content rules for documents written through staff sync (pure). They do not describe every
  * field: they stop the writes that would damage the site whatever the role's permissions are:
- * script / HTML URLs anywhere in a document, and singleton documents that arrive truncated.
+ * script / HTML URLs anywhere in a document, URL fields with a scheme other than http(s), mailto
+ * or tel, and singleton documents that arrive truncated.
  */
 import { findUnsafeString, safeImageUrl } from '../../utils/safeUrl';
 import type { CMSState } from '../../types/cms';
@@ -12,7 +13,9 @@ export function unsafeContentReason(op: SyncOp): string | null {
   const payload = op.op === 'set' ? op.value : op.op === 'upsert' ? op.item : op.op === 'replace' ? op.items : null;
   if (payload === null) return null;
   const path = findUnsafeString(payload);
-  return path ? `"${op.key}" contains a script or non-media data URL (${path}).` : null;
+  return path
+    ? `"${op.key}" contains a link that cannot be stored (${path}). Use an http(s), mailto, tel or same-site address, or an uploaded image.`
+    : null;
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>

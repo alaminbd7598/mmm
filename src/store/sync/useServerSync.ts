@@ -19,6 +19,7 @@ import { mergeLiveCMSState } from '../../utils/cmsLogic';
 import {
   CONFLICT_REASON_PREFIX,
   type DemoAccount,
+  type LoginSetupIssue,
   type PublicSubmitRequest,
   type SafeUser,
   type StateKey,
@@ -130,6 +131,8 @@ export interface ServerSync {
   liveSyncStatus: LiveSyncStatus;
   /** Sample sign-ins of a demo server (empty in database mode or when the demo admin is off). */
   demoAccounts: DemoAccount[];
+  /** The server setting still missing before staff can sign in (null when sign-in works). */
+  loginSetup: LoginSetupIssue | null;
   /** Send public form records to the server now and wait for its answer. Does not touch local state. */
   submitPublic: (items: PublicSubmitRequest['items']) => Promise<PublicSubmitOutcome>;
   /** Push pending local changes now. Resolves true when nothing is left pending. */
@@ -153,6 +156,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     lastSyncedAt: null,
   });
   const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
+  const [loginSetup, setLoginSetup] = useState<LoginSetupIssue | null>(null);
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -233,6 +237,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     audienceRef.current = data.audience === 'staff' ? 'staff' : 'public';
     if (audienceRef.current === 'public') writePublicCache(data.state);
     setDemoAccounts(Array.isArray(data.demoAccounts) ? data.demoAccounts : []);
+    setLoginSetup(data.loginSetup ?? null);
     // Staff poll every 5 s: switch interval as soon as the audience is known, not after the next tick.
     if ((audienceRef.current === 'staff') !== wasStaff) restartPollRef.current();
     setMode(data.mode === 'demo' ? 'demo' : 'database');
@@ -509,6 +514,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     storageMode,
     liveSyncStatus,
     demoAccounts,
+    loginSetup,
     submitPublic,
     flush,
     refetch,

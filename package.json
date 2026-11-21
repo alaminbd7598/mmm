@@ -9,7 +9,7 @@
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/*.test.ts src/store/sync/*.test.ts src/server/**/*.test.ts",
+    "test": "tsx --test src/utils/*.test.ts src/store/sync/*.test.ts src/server/*.test.ts src/server/**/*.test.ts",
     "test:e2e": "node scripts/e2e/run.cjs",
     "db:push": "prisma db push",
     "db:import": "tsx --env-file-if-exists=.env scripts/db-import.ts"

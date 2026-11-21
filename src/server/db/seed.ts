@@ -10,13 +10,18 @@
  * - `database` mode: NO account is seeded with a password. After seeding, the first Super Admin
  *   receives ADMIN_BOOTSTRAP_PASSWORD (see ensureBootstrapPassword) and must change it at first
  *   sign-in; every other account stays unusable until a Super Admin sets its password.
+ *
+ * Accounts: the demo keeps all five sample accounts. A database gets the administrator and the
+ * certificate signatories (their names and designations are printed on public certificates and
+ * tokens); the owner adds the real staff from the Users tab.
  */
 import bcrypt from 'bcryptjs';
-import type { ApplyOpsOptions, DemoAccount, StorageMode, SyncOp } from '../contracts';
-import type { CMSState } from '../../types/cms';
+import { MIN_BOOTSTRAP_PASSWORD_LENGTH, type ApplyOpsOptions, type DemoAccount, type StorageMode, type SyncOp } from '../contracts';
+import type { AdminUser, CMSState } from '../../types/cms';
 import { INITIAL_CMS_STATE } from '../../data/seedData';
-import { mergeLiveCMSState } from '../../utils/cmsLogic';
+import { mergeLiveCMSState, normalizeAdminRole } from '../../utils/cmsLogic';
 import { validateNewPassword } from '../auth/password';
+import { isSignatorySlot } from '../state/signatories';
 import seedContent from './seed-content.json';
 import { DEMO_STAFF_PASSWORDS } from './demo-credentials';
 import { stateToOps } from './state-ops';
@@ -32,8 +37,13 @@ export interface SeedPlan {
   opts: ApplyOpsOptions;
 }
 
+/** Seed accounts a real database starts with: the Super Admin and the certificate signatories. */
+export const isDatabaseSeedUser = (user: AdminUser): boolean =>
+  normalizeAdminRole(user.role) === 'Super Admin' || isSignatorySlot(user.signatorySlot);
+
 export async function buildSeedPlan(mode: StorageMode): Promise<SeedPlan> {
-  const state = buildSeedState();
+  const seed = buildSeedState();
+  const state: CMSState = mode === 'demo' ? seed : { ...seed, users: seed.users.filter(isDatabaseSeedUser) };
   const passwordHashes: Record<string, string> = {};
   if (mode === 'demo') {
     await Promise.all(
@@ -83,8 +93,14 @@ export async function ensureBootstrapPassword(
     return 'missing';
   }
   const policy = validateNewPassword(password, 'admin');
-  if (!policy.ok) {
-    log(`[setup] ADMIN_BOOTSTRAP_PASSWORD was not applied: ${policy.error} Choose a stronger value and restart.`);
+  const problem =
+    password.length < MIN_BOOTSTRAP_PASSWORD_LENGTH
+      ? `It must be at least ${MIN_BOOTSTRAP_PASSWORD_LENGTH} characters long.`
+      : policy.ok
+        ? null
+        : policy.error;
+  if (problem) {
+    log(`[setup] ADMIN_BOOTSTRAP_PASSWORD was not applied: ${problem} Choose a stronger value and restart.`);
     return 'weak';
   }
   await target.setInitialPassword(admins[0].id, await bcrypt.hash(password, BCRYPT_COST));

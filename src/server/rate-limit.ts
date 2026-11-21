@@ -15,8 +15,9 @@ const firstOf = (value: string | null): string => (value || '').split(',')[0].tr
 
 /**
  * Number of reverse proxies in front of the app that append to X-Forwarded-For (default 1: the
- * hosting platform's own proxy). Set TRUSTED_PROXY_HOPS=2 when a CDN sits in front of that proxy,
- * or 0 when the app is reached directly and the header must be ignored.
+ * hosting platform's own proxy: Hostinger, Cloud Run). Set TRUSTED_PROXY_HOPS=2 when a CDN or load
+ * balancer sits in front of that proxy, or 0 when the app is reached directly and the header must
+ * be ignored. Vercel is detected automatically and needs no setting.
  */
 export function trustedProxyHops(env: EnvLike = process.env): number {
   const raw = Number.parseInt(env.TRUSTED_PROXY_HOPS ?? '', 10);
@@ -62,22 +63,55 @@ function liveBucket(key: string, now: number): Bucket | undefined {
   return bucket;
 }
 
+/** Upper bound on tracked counters, so the map cannot grow without limit under a flood of keys. */
+export const MAX_BUCKETS = 20_000;
+/** Prefix of site-wide budgets (daily caps); these counters are never evicted. */
+export const GLOBAL_PREFIX = 'global:';
+
+/**
+ * Make room for one more counter: drop expired ones and, if the map is still full, the oldest
+ * per-client counters (insertion order) until a tenth of the map is free.
+ */
+function makeRoom(now: number): void {
+  for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
+  if (buckets.size < MAX_BUCKETS) return;
+  const target = Math.floor(MAX_BUCKETS * 0.9);
+  for (const key of buckets.keys()) {
+    if (buckets.size <= target) break;
+    if (!key.startsWith(GLOBAL_PREFIX)) buckets.delete(key);
+  }
+}
+
 /**
  * Add `amount` to the window's counter and report whether the total stays within `limit`.
  * With `amount` 1 this is a fixed-window request limiter; larger amounts make it a budget
  * (e.g. uploaded bytes per day).
  */
 export function consume(key: string, limit: number, windowMs: number, amount = 1, now = Date.now()): boolean {
-  if (buckets.size > 10_000) {
-    for (const [k, b] of buckets) if (b.resetAt <= now) buckets.delete(k);
-  }
   const bucket = liveBucket(key, now);
   if (!bucket) {
+    if (buckets.size >= MAX_BUCKETS) makeRoom(now);
     buckets.set(key, { count: amount, resetAt: now + windowMs });
     return amount <= limit;
   }
   bucket.count += amount;
   return bucket.count <= limit;
+}
+
+/** Number of live counters (monitoring and tests). */
+export const bucketCount = (): number => buckets.size;
+
+/**
+ * Requests without a trustworthy address all share one counter per scope. That counter gets this
+ * multiple of the per-client limit, so a host that sends no X-Forwarded-For does not lock real
+ * visitors out while the total stays bounded.
+ */
+export const UNKNOWN_CLIENT_FACTOR = 10;
+
+/** Per-client fixed-window limiter keyed by scope and address: true when the request is allowed. */
+export function rateLimitClient(scope: string, ip: string, limit: number, windowMs: number, now = Date.now()): boolean {
+  const effective = ip === UNKNOWN_CLIENT ? limit * UNKNOWN_CLIENT_FACTOR : limit;
+  return consume(`${scope}:${ip}`, effective, windowMs, 1, now);
 }
 
 /** Fixed-window limiter: true when this request is allowed. */

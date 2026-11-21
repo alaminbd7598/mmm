@@ -287,7 +287,10 @@ export interface DataStore {
   /** Ensure schema/seed exist (idempotent). Called lazily before the first read. */
   init(): Promise<void>;
   getVersion(): Promise<{ version: number; updatedAt: string }>;
+  /** The current state. The snapshot is shared between requests and frozen: copy before changing anything. */
   getSnapshot(): Promise<StateSnapshot>;
+  /** Database mode only: true while no Super Admin has a password yet (ADMIN_BOOTSTRAP_PASSWORD missing or refused). */
+  adminPasswordPending(): Promise<boolean>;
   /**
    * Apply ops atomically (single DB transaction) and bump the version once.
    * The caller has already authorised and validated every op.
@@ -348,7 +351,12 @@ export interface StateResponse {
   me?: SafeUser;
   /** Demo mode with the sample admin enabled only: the sample sign-ins shown on the login page. */
   demoAccounts?: DemoAccount[];
+  /** Visitors only: the environment variable the owner still has to set before staff can sign in. */
+  loginSetup?: LoginSetupIssue;
 }
+
+/** Why staff sign-in is unavailable, named after the environment variable that fixes it. */
+export type LoginSetupIssue = 'DATABASE_URL' | 'JWT_SECRET' | 'ADMIN_BOOTSTRAP_PASSWORD';
 
 export interface DemoAccount {
   username: string;
@@ -400,3 +408,5 @@ export interface PublicSubmitResponse {
 }
 
 export const MIN_PASSWORD_LENGTH = 10;
+/** ADMIN_BOOTSTRAP_PASSWORD travels through hosting dashboards, so it has to be longer. */
+export const MIN_BOOTSTRAP_PASSWORD_LENGTH = 12;

@@ -1,6 +1,6 @@
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertRateLimit, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
-import { consume } from '@/src/server/rate-limit';
+import { GLOBAL_PREFIX, consume } from '@/src/server/rate-limit';
 import { getGenAI, getGeminiModel } from '@/src/server/ai/gemini';
 import { buildChatSystemPrompt, chatRequestSchema } from '@/src/server/ai/chat-prompt';
 
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
     if (state.aiBotConfig?.enabled === false) return json({ reply: null });
     // Site-wide daily cap on paid Gemini calls, whatever addresses the requests come from.
     // Beyond it the widget keeps answering from its local knowledge base.
-    if (!consume('global:chat-gemini', chatDailyLimit(), 24 * 60 * 60 * 1000)) return json({ reply: null });
+    if (!consume(`${GLOBAL_PREFIX}chat-gemini`, chatDailyLimit(), 24 * 60 * 60 * 1000)) return json({ reply: null });
 
     try {
       const response = await ai.models.generateContent({

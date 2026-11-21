@@ -1,7 +1,7 @@
 import 'server-only';
 import { NextResponse } from 'next/server';
 import { StoreConflictError, StoreNotFoundError, StoreUnavailableError } from './db/errors';
-import { clientIp, rateLimit } from './rate-limit';
+import { clientIp, rateLimitClient } from './rate-limit';
 
 /** JSON response helper with no-store caching (API data is per-request and may be personal). */
 export function json<T>(body: T, init?: number | ResponseInit): NextResponse {
@@ -71,9 +71,9 @@ export function handleError(err: unknown): NextResponse {
 
 export { clientIp, rateLimit } from './rate-limit';
 
-/** Per-client limiter; requests without a trustworthy address share one bucket per scope. */
+/** Per-client limiter; requests without a trustworthy address share one (larger) bucket per scope. */
 export function assertRateLimit(req: Request, scope: string, limit: number, windowMs: number): void {
-  if (!rateLimit(`${scope}:${clientIp(req)}`, limit, windowMs)) {
+  if (!rateLimitClient(scope, clientIp(req), limit, windowMs)) {
     throw new HttpError(429, 'Too many requests. Please try again shortly.', 'RATE_LIMITED');
   }
 }

@@ -114,3 +114,20 @@ test('public submit caps item count and validates complaints', () => {
   assert.equal(parsePublicSubmit({ items: new Array(11).fill({ key: 'complaints', item: complaint }) }).ok, false);
   assert.equal(parsePublicSubmit({ items: [{ key: 'users', item: {} }] }).ok, false);
 });
+
+test('public submit refuses script links and non-web CV links', () => {
+  const app = (extra: Record<string, unknown>) => ({
+    items: [
+      {
+        key: 'careerApplications',
+        item: { jobId: 'job-1', applicantName: 'Ali', phone: '01711000000', email: 'a@x.test', educationBn: 'BA', ...extra },
+      },
+    ],
+  });
+  assert.equal(parsePublicSubmit(app({ cvLinkOrFileName: 'https://drive.google.com/file/d/1' })).ok, true);
+  assert.equal(parsePublicSubmit(app({ cvLinkOrFileName: 'My_CV.pdf' })).ok, true);
+  assert.equal(parsePublicSubmit(app({ cvLinkOrFileName: 'javascript:alert(1)' })).ok, false);
+  assert.equal(parsePublicSubmit(app({ cvLinkOrFileName: 'file:///etc/passwd' })).ok, false);
+  assert.equal(parsePublicSubmit(app({ cvLinkOrFileName: 'data:text/html,<b>x</b>' })).ok, false);
+  assert.equal(parsePublicSubmit(app({ coverLetterBn: 'javascript:alert(1)' })).ok, false);
+});

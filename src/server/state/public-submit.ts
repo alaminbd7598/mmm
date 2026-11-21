@@ -250,3 +250,42 @@ export function planPublicSubmit(items: readonly PublicItemInput[], state: CMSSt
   }
   return { ok: true, ops: builder.ops(), ids };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Upload accounting (limits are enforced in public-service.ts)
+// ---------------------------------------------------------------------------------------------
+
+const inlineLength = (value: string | undefined): number => (value && value.startsWith('data:') ? value.length : 0);
+
+/** Inline files (student photos, CVs) carried by a submission: how many and their base64 length. */
+export function countUploads(items: readonly PublicItemInput[]): { files: number; chars: number } {
+  let files = 0;
+  let chars = 0;
+  for (const entry of items) {
+    const length =
+      entry.key === 'leads'
+        ? inlineLength(entry.item.detailedData?.studentPhotoUrl)
+        : entry.key === 'careerApplications'
+          ? inlineLength(entry.item.cvFileDataUrl)
+          : 0;
+    if (length > 0) {
+      files += 1;
+      chars += length;
+    }
+  }
+  return { files, chars };
+}
+
+const storedUploadTotals = new WeakMap<CMSState, number>();
+
+/** Size of the inline files already stored in leads and job applications (memoised per snapshot). */
+export function storedUploadChars(state: CMSState): number {
+  let total = storedUploadTotals.get(state);
+  if (total === undefined) {
+    total = 0;
+    for (const lead of state.leads || []) total += inlineLength(lead.detailedData?.studentPhotoUrl);
+    for (const app of state.careerApplications || []) total += inlineLength(app.cvFileDataUrl);
+    storedUploadTotals.set(state, total);
+  }
+  return total;
+}

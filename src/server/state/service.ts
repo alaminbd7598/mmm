@@ -3,14 +3,16 @@ import { normalizeAdminRole } from '../../utils/cmsLogic';
 import { hashPassword } from '../auth/password';
 import { findProfile, toSafeUser } from '../auth/safe-user';
 import { getStaffSession } from '../auth/session';
+import type { CMSState } from '../../types/cms';
 import { CONFLICT_REASON_PREFIX, type StaffSession, type StateResponse, type SyncResponse } from '../contracts';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
-import { demoAdminEnabled } from '../auth/jwt';
+import { demoAdminEnabled, loginSetupIssue } from '../auth/jwt';
 import { demoAccounts } from '../db/seed';
 import { authoriseOps } from './authorize';
 import { contentRejection } from './document-rules';
 import { projectPublicState, projectStaffState } from './project';
+import { enforceSignatorySlots } from './signatories';
 import { extractSyncPasswords } from './sync-passwords';
 import { parseSyncRequest } from './validate';
 
@@ -28,6 +30,21 @@ async function optionalStaffSession(): Promise<StaffSession | null> {
 }
 
 /**
+ * Public projection per stored state. Snapshots are immutable and shared until the next write
+ * (see DataStore.getSnapshot), so the projection is computed once per state version.
+ */
+const publicProjections = new WeakMap<CMSState, Partial<CMSState>>();
+
+function publicProjection(state: CMSState): Partial<CMSState> {
+  let projection = publicProjections.get(state);
+  if (!projection) {
+    projection = projectPublicState(state);
+    publicProjections.set(state, projection);
+  }
+  return projection;
+}
+
+/**
  * GET /api/state. Staff whose password must still be changed get the public projection (their
  * seeded password is public knowledge) together with `me`, so the client can force the change.
  */
@@ -35,20 +52,25 @@ export async function buildStateResponse(): Promise<StateResponse> {
   const store = await getStore();
   const [session, snapshot] = await Promise.all([optionalStaffSession(), store.getSnapshot()]);
   const base = { ok: true as const, mode: store.mode, version: snapshot.version, updatedAt: snapshot.updatedAt };
-  const publicResponse = (): StateResponse => ({
-    ...base,
-    audience: 'public',
-    state: projectPublicState(snapshot.state),
-    // The demo's sample sign-ins are public on purpose; they are served only while the demo admin is on.
-    ...(store.mode === 'demo' && demoAdminEnabled() ? { demoAccounts: demoAccounts() } : {}),
-  });
+  const publicResponse = async (): Promise<StateResponse> => {
+    // Lets the login page tell the owner which setting is missing; nobody can sign in in that state.
+    const loginSetup = loginSetupIssue(store.mode, await store.adminPasswordPending());
+    return {
+      ...base,
+      audience: 'public',
+      state: publicProjection(snapshot.state),
+      // The demo's sample sign-ins are public on purpose; they are served only while the demo admin is on.
+      ...(store.mode === 'demo' && demoAdminEnabled() ? { demoAccounts: demoAccounts() } : {}),
+      ...(loginSetup ? { loginSetup } : {}),
+    };
+  };
   if (!session) return publicResponse();
 
   const auth = await store.getUserAuthById(session.userId);
   if (!auth) return publicResponse();
   const me = toSafeUser(findProfile(snapshot.state.users, auth.id), auth);
   const state = auth.mustChangePassword
-    ? projectPublicState(snapshot.state)
+    ? publicProjection(snapshot.state)
     : projectStaffState(snapshot.state, normalizeAdminRole(auth.role), snapshot.state.rbacMatrix, auth.id);
   return { ...base, audience: 'staff', state, me };
 }
@@ -107,11 +129,17 @@ export async function runStaffSync(session: StaffSession, rawBody: unknown): Pro
     mustChangePassword[userId] = true;
   }
 
+  // Server-made follow-up writes (one holder per signatory slot) come after the client's ops, so
+  // conflict indexes below still point into `passwords.ops`.
   const result = await store.applyOps(
-    passwords.ops.map((o) => o.op),
+    enforceSignatorySlots(
+      passwords.ops.map((o) => o.op),
+      snapshot.state
+    ),
     { passwordHashes, mustChangePassword, baseVersion: parsed.value.baseVersion }
   );
   for (const at of result.conflicts ?? []) {
+    if (!passwords.ops[at]) continue;
     rejected.push({
       index: passwords.ops[at].index,
       reason: `${CONFLICT_REASON_PREFIX} "${passwords.ops[at].op.key}" was changed by someone else after you loaded it.`,

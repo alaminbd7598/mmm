@@ -18,6 +18,7 @@ import {
   cloneJson,
   computeOrder,
   dedupeById,
+  deepFreeze,
   indexedColumns,
   normalizeEmail,
   normalizeUsername,
@@ -67,15 +68,6 @@ function translateError(err: unknown): unknown {
   return err;
 }
 
-/** Recursively freeze a cached snapshot so no request can alter what later requests read. */
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
-}
-
 /** Whether an op must be skipped because its target was written after the version the sender saw. */
 function isStale(rowVersion: number | undefined, opBase: number | undefined, opts: ApplyOpsOptions): boolean {
   if (opts.baseVersion === undefined || rowVersion === undefined) return false;
@@ -98,17 +90,23 @@ export class PrismaStore implements DataStore {
 
   /**
    * @param loadSeed produces the seed plan for an empty database.
-   * @param afterInit runs once per process after seeding (bootstrap password); receives this store.
+   * @param bootstrap runs once per process after seeding and sets the first administrator password
+   *   when it can; resolves to true when sign-in is still impossible afterwards.
    */
   constructor(
     private readonly db: DbClient,
     private readonly loadSeed: () => Promise<SeedPlan>,
-    private readonly afterInit?: (store: PrismaStore) => Promise<void>
+    private readonly bootstrap?: (store: PrismaStore) => Promise<boolean>
   ) {}
+
+  /** True after `bootstrap` reported that no Super Admin has a password; re-checked until one has. */
+  private passwordPending = false;
 
   init(): Promise<void> {
     this.initPromise ??= this.ensureSeeded()
-      .then(() => this.afterInit?.(this))
+      .then(async () => {
+        this.passwordPending = (await this.bootstrap?.(this)) ?? false;
+      })
       .catch((err) => {
         this.initPromise = null;
         throw translateError(err);
@@ -396,6 +394,14 @@ export class PrismaStore implements DataStore {
       await this.db.user.updateMany({ where: { id }, data: { sessionVersion: { increment: 1 } } });
       return (await this.db.user.findUnique({ where: { id }, select: { sessionVersion: true } }))?.sessionVersion ?? 0;
     });
+  }
+
+  async adminPasswordPending(): Promise<boolean> {
+    await this.init();
+    if (!this.passwordPending) return false;
+    // Another process or `npm run db:import` may have set a password since this one started.
+    this.passwordPending = !(await this.listSuperAdmins()).some((admin) => admin.hasPassword);
+    return this.passwordPending;
   }
 
   /** Active Super Admin accounts in display order, with whether each has a password (bootstrap check). */
