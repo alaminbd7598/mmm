@@ -69,6 +69,8 @@ const safeLinkUrl = (url: string): string => {
 const safeImageUrl = (url: string): string => {
   const u = (url || '').trim();
   if (/^https?:\/\//i.test(u) || /^\/(?!\/)/.test(u)) return u;
+  // Same inline raster formats the admin editor accepts (AdminBlogTab), so saved covers stay visible.
+  if (/^data:image\/(png|jpe?g|webp|gif|avif);base64,/i.test(u)) return u;
   return '';
 };
 

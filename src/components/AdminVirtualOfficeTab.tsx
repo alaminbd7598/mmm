@@ -31,6 +31,7 @@ import {
   computeVirtualOfficeAnalytics,
   evaluateVirtualOfficeLiveStatus,
 } from '../utils/virtualOfficeLogic';
+import { hasRolePermission } from '../utils/cmsLogic';
 
 type Tr = (bn: string, en: string, ar: string) => string;
 
@@ -250,10 +251,15 @@ export const AdminVirtualOfficeTab: React.FC = () => {
     updateVirtualOfficeSessionStatus,
     deleteVirtualOfficeSession,
     pushToast,
+    currentUser,
   } = useCMS();
 
   const tr: Tr = (bn, en, ar) => (language === 'bn' ? bn : language === 'ar' ? ar : en);
   const locale = language === 'bn' ? 'bn-BD' : language === 'ar' ? 'ar' : 'en-GB';
+
+  const userRole = currentUser?.role || 'Super Admin';
+  const canEdit = hasRolePermission(userRole, 'virtual-office', 'edit', state.rbacMatrix);
+  const canDelete = hasRolePermission(userRole, 'virtual-office', 'delete', state.rbacMatrix);
 
   const storeCfg = useMemo(() => normalizeConfig(state.virtualOfficeConfig), [state.virtualOfficeConfig]);
   const sessions = useMemo<VirtualOfficeSession[]>(
@@ -325,10 +331,12 @@ export const AdminVirtualOfficeTab: React.FC = () => {
   }, []);
 
   const patch = (p: Partial<VirtualOfficeConfig>) => {
+    if (!canEdit) return;
     setDraft((prev) => ({ ...prev, ...p }));
     setDirty(true);
   };
   const patchDesk = (id: string, p: Partial<VirtualOfficeDesk>) => {
+    if (!canEdit) return;
     setDraft((prev) => ({ ...prev, desks: prev.desks.map((d) => (d.id === id ? { ...d, ...p } : d)) }));
     setDirty(true);
   };
@@ -361,6 +369,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
   };
 
   const commit = (next: VirtualOfficeConfig) => {
+    if (!canEdit) return;
     const error = validate(next);
     if (error) {
       pushToast(tr('সংরক্ষণ করা যায়নি', 'Could not save', 'تعذر الحفظ'), error, 'info');
@@ -383,11 +392,13 @@ export const AdminVirtualOfficeTab: React.FC = () => {
 
   /** Switchboard actions save instantly on top of the stored config, leaving unsaved form edits untouched. */
   const quickSave = (p: Pick<VirtualOfficeConfig, 'enabled'> | Pick<VirtualOfficeConfig, 'manualStatus'>) => {
+    if (!canEdit) return;
     updateVirtualOfficeConfig({ ...fillBlankCredentials(storeCfg, secureRef.current), ...p });
     setDraft((prev) => ({ ...prev, ...p }));
   };
 
   const addDesk = () => {
+    if (!canEdit) return;
     const desk: VirtualOfficeDesk = {
       id: `desk-${Date.now().toString(36)}`,
       nameBn: '',
@@ -776,7 +787,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={!dirty}
+            disabled={!dirty || !canEdit}
             onClick={() => {
               setDraft(fillBlankCredentials(storeCfg, secureRef.current));
               setDirty(false);
@@ -788,7 +799,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
           </button>
           <button
             type="button"
-            disabled={!dirty}
+            disabled={!dirty || !canEdit}
             onClick={() => commit(draft)}
             data-testid="virtual-office-save"
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#005a6e] px-4 py-2 text-xs font-bold text-white shadow hover:bg-[#004656] disabled:opacity-50"
@@ -887,7 +898,10 @@ export const AdminVirtualOfficeTab: React.FC = () => {
                       </span>
                       <select
                         value={s.sessionStatus}
-                        onChange={(e) => updateVirtualOfficeSessionStatus(s.id, e.target.value as VirtualOfficeSessionStatus)}
+                        disabled={!canEdit}
+                        onChange={(e) => {
+                          if (canEdit) updateVirtualOfficeSessionStatus(s.id, e.target.value as VirtualOfficeSessionStatus);
+                        }}
                         aria-label={`${tr('স্ট্যাটাস পরিবর্তন', 'Change status', 'تغيير الحالة')}: ${s.fullName}`}
                         className={`${INPUT} min-w-[9.5rem] py-1.5`}
                       >
@@ -904,7 +918,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              deleteVirtualOfficeSession(s.id);
+                              if (canDelete) deleteVirtualOfficeSession(s.id);
                               setConfirmDeleteId(null);
                             }}
                             className="rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-700"
@@ -923,6 +937,7 @@ export const AdminVirtualOfficeTab: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteId(s.id)}
+                          disabled={!canDelete}
                           aria-label={`${tr('সেশন মুছুন', 'Delete session', 'حذف الجلسة')}: ${s.fullName}`}
                           className="rounded-lg border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-900/30"
                         >
