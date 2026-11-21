@@ -66,7 +66,9 @@ const ORGANIZATION_JSON_LD = {
 
 const THEME_BOOT_SCRIPT = `(function(){try{var s=localStorage.getItem('maharat_model_madrasah_theme')||localStorage.getItem('craft_international_institute_theme')||localStorage.getItem('theme');var d=s==='dark'||(s!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.classList.add(d?'dark':'light');r.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Per-request script nonce set by src/proxy.ts (Content-Security-Policy without inline scripts).
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="bn" suppressHydrationWarning>
       <head>
@@ -77,7 +79,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
         {/* Apply the saved light / dark choice before first paint (same rule as ThemeContext). */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION_JSON_LD) }}

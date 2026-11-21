@@ -1112,7 +1112,43 @@ async function main() {
         assert(/frame-ancestors 'self'/.test(h['content-security-policy'] || ''), `${p}: CSP missing`);
         assert(!('x-powered-by' in h), `${p}: x-powered-by present`);
       }
+      // Pages: scripts run only with the per-request nonce; one policy header, a new nonce each time.
+      const nonces = new Set();
+      for (const p of ['/', '/admin', '/blog', `/no-such-page-${RUN_ID}`]) {
+        const res = await api.get(p);
+        const csp = res.headers()['content-security-policy'] || '';
+        const nonce = (/script-src [^;]*'nonce-([A-Za-z0-9+/=]+)'/.exec(csp) || [])[1];
+        assert(nonce && /'strict-dynamic'/.test(csp), `${p}: no script nonce in "${csp.slice(0, 120)}"`);
+        assert(res.headersArray().filter((h) => h.name.toLowerCase() === 'content-security-policy').length === 1, `${p}: several CSP headers`);
+        const scripts = (await res.text()).match(/<script\b[^>]*>/g) || [];
+        const bare = scripts.filter((tag) => !tag.includes(`nonce="${nonce}"`) && !/type="application\/ld\+json"/.test(tag));
+        assert(scripts.length > 3 && bare.length === 0, `${p}: script tags without the nonce: ${bare.slice(0, 2).join(' ')}`);
+        nonces.add(nonce);
+      }
+      assert(nonces.size === 4, 'the nonce is reused between responses');
+      const apiCsp = (await api.get('/api/state/meta')).headers()['content-security-policy'] || '';
+      assert(!/nonce-/.test(apiCsp), 'API responses carry a nonce policy');
       await api.dispose();
+
+      // In the browser: the app runs, and script that did not come with the nonce does not.
+      const ctx = await newVisitorContext(browser);
+      const page = await ctx.newPage();
+      await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+      const probe = await page.evaluate(async () => {
+        const blocked = [];
+        document.addEventListener('securitypolicyviolation', (e) => blocked.push(e.violatedDirective));
+        document.body.insertAdjacentHTML('beforeend', '<img src="data:," onerror="window.__e2eInline = 1">');
+        const el = document.createElement('div');
+        el.setAttribute('onclick', 'window.__e2eInline = 2');
+        document.body.appendChild(el);
+        el.click();
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return { ran: window.__e2eInline, blocked, rendered: document.querySelectorAll('#root *').length };
+      });
+      await ctx.close();
+      assert(probe.ran === undefined, `an injected inline handler ran (${probe.ran})`);
+      assert(probe.blocked.length >= 1, 'no CSP violation was reported for the injected handlers');
+      assert(probe.rendered > 50, 'the application did not render under the nonce policy');
     });
 
     if (DB_MODE) {

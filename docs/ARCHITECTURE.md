@@ -97,6 +97,7 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
   username, not on the denylist (legacy defaults and common passwords).
 - `src/proxy.ts` (Next.js 16 replacement for `middleware.ts`) rejects requests to `/api/admin/*`
   without a valid staff session (401). Route handlers re-check the session and RBAC themselves.
+  For pages the same file only adds the CSP nonce (see "Abuse limits and hardening").
 - Google sign-in is not offered: the server has no way to verify a Google identity. The button on
   the login page and the "Connect Google Calendar" button report that the service is unavailable
   (the calendar offers an .ICS export instead).
@@ -127,7 +128,11 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
 - `getSnapshot()` is cached per state version and frozen; the public projection is cached per
   snapshot; `/api/state/meta` is one primary-key query.
 - Security headers (CSP, HSTS, nosniff, Referrer-Policy, X-Frame-Options, Permissions-Policy) are
-  set in `next.config.mjs`.
+  set in `next.config.mjs`. The policy text lives in `src/csp.mjs`. Pages are rendered per request,
+  so `src/proxy.ts` gives each page response a fresh script nonce
+  (`script-src 'nonce-…' 'strict-dynamic'`): Next.js puts it on the scripts it emits and the layout
+  on its theme script, and inline handlers or injected `<script>` markup do not run. API and asset
+  responses keep the static policy. Styles still allow `'unsafe-inline'` (the UI uses inline styles).
 
 ## API route handlers (`src/app/api/**/route.ts`)
 
