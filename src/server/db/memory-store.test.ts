@@ -92,12 +92,12 @@ test('password fields are stripped from stored user and candidate documents', ()
   }
   assert.equal('password' in (state.careerCandidates ?? [])[0], false);
   assert.equal(data.userAuth.get('u3')?.passwordHash, 'hash-u3');
-  assert.equal(data.candidateAuth.get('c1'), 'hash-c1');
+  assert.deepEqual(data.candidateAuth.get('c1'), { passwordHash: 'hash-c1', sessionVersion: 0 });
 });
 
 test('upsert of an existing user without a new hash keeps its hash and flag', () => {
   const data = applyOpsToMemory(seeded(), [{ op: 'upsert', key: 'users', item: user('u1', 'admin', { fullName: 'Renamed' }) }]);
-  assert.deepEqual(data.userAuth.get('u1'), { passwordHash: 'hash-u1', mustChangePassword: true });
+  assert.deepEqual(data.userAuth.get('u1'), { passwordHash: 'hash-u1', mustChangePassword: true, sessionVersion: 0 });
   assert.equal(data.collections.users[0].fullName, 'Renamed');
 });
 
@@ -105,11 +105,11 @@ test('upsert with a new hash replaces it; mustChangePassword only changes when g
   const data = applyOpsToMemory(seeded(), [{ op: 'upsert', key: 'users', item: user('u1', 'admin') }], {
     passwordHashes: { u1: 'hash-new' },
   });
-  assert.deepEqual(data.userAuth.get('u1'), { passwordHash: 'hash-new', mustChangePassword: true });
+  assert.deepEqual(data.userAuth.get('u1'), { passwordHash: 'hash-new', mustChangePassword: true, sessionVersion: 1 });
   const cleared = applyOpsToMemory(data, [{ op: 'upsert', key: 'users', item: user('u1', 'admin') }], {
     mustChangePassword: { u1: false },
   });
-  assert.deepEqual(cleared.userAuth.get('u1'), { passwordHash: 'hash-new', mustChangePassword: false });
+  assert.deepEqual(cleared.userAuth.get('u1'), { passwordHash: 'hash-new', mustChangePassword: false, sessionVersion: 1 });
 });
 
 test('delete of a user removes its auth record', () => {
@@ -123,8 +123,8 @@ test('replace on users preserves hashes of users that still exist and drops remo
     { op: 'replace', key: 'users', items: [user('u2', 'editor'), user('u9', 'newbie')] },
   ], { passwordHashes: { u9: 'hash-u9' } });
   assert.deepEqual(ids(data, 'users'), ['u2', 'u9']);
-  assert.deepEqual(data.userAuth.get('u2'), { passwordHash: 'hash-u2', mustChangePassword: false });
-  assert.deepEqual(data.userAuth.get('u9'), { passwordHash: 'hash-u9', mustChangePassword: false });
+  assert.deepEqual(data.userAuth.get('u2'), { passwordHash: 'hash-u2', mustChangePassword: false, sessionVersion: 0 });
+  assert.deepEqual(data.userAuth.get('u9'), { passwordHash: 'hash-u9', mustChangePassword: false, sessionVersion: 0 });
   assert.equal(data.userAuth.has('u1'), false);
 });
 

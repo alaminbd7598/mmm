@@ -53,10 +53,11 @@ test('stateToOps covers present keys in replace and upsert modes', () => {
   ]);
 });
 
-test('seed state merges seed content over the defaults and carries legacy user passwords', () => {
+test('seed state merges seed content over the defaults and carries no passwords', () => {
   const state = buildSeedState();
   assert.ok(state.users.length > 0);
-  assert.equal(plaintextPasswords(state, 'users').size, state.users.length);
+  assert.equal(plaintextPasswords(state, 'users').size, 0);
+  assert.equal(JSON.stringify(state).includes('admin123'), false);
   const ops = stateToOps(state, 'replace');
   assert.ok(ops.some((o) => o.op === 'set' && o.key === 'rbacMatrix'));
   assert.ok(ops.some((o) => o.op === 'replace' && o.key === 'departmentVideos'));

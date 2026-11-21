@@ -5,13 +5,13 @@ import { extractSyncPasswords } from './sync-passwords';
 
 test('valid user passwords are collected and stripped; weak ones reject the op', () => {
   const ops: SyncOp[] = [
-    { op: 'upsert', key: 'users', item: { id: 'u1', username: 'ali', password: 'Strong123', passwordHash: 'x' } },
+    { op: 'upsert', key: 'users', item: { id: 'u1', username: 'ali', password: 'Strong-Pass-123', passwordHash: 'x' } },
     { op: 'upsert', key: 'users', item: { id: 'u2', username: 'bob', password: 'short' } },
     { op: 'upsert', key: 'careerCandidates', item: { id: 'c1', password: 'whatever' } },
     { op: 'upsert', key: 'notices', item: { id: 'n1', password: 'kept-as-is' } },
   ];
   const r = extractSyncPasswords(ops.map((op, index) => ({ index, op })));
-  assert.deepEqual([...r.userPasswords], [['u1', 'Strong123']]);
+  assert.deepEqual([...r.userPasswords], [['u1', 'Strong-Pass-123']]);
   assert.deepEqual(r.rejected.map((x) => x.index), [1]);
   assert.deepEqual(r.ops.map((o) => o.index), [0, 2, 3]);
   const [user, candidate, notice] = r.ops.map((o) => (o.op.op === 'upsert' ? o.op.item : null));

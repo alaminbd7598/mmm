@@ -4,6 +4,7 @@ import type { AdminRole, AdminUser, CMSState } from '../../types/cms';
 import { DEFAULT_RBAC_MATRIX } from '../../utils/cmsLogic';
 import type { StaffSession, SyncOp } from '../contracts';
 import { authoriseOps, changedUserFields } from './authorize';
+import { canReplaceKey, canViewKey } from './permissions';
 
 const user = (id: string, role: AdminRole, extra: Partial<AdminUser> = {}): AdminUser => ({
   id,
@@ -169,20 +170,51 @@ test('the requester is the only active Super Admin: demoting the other remaining
   assert.match(r.rejected[0].reason, /last Super Admin/);
 });
 
-test('wildcard restore permission allows replace but not single deletes without delete rights', () => {
+test('backup-ai / releases permissions are not a blanket write grant', () => {
   const s = state();
-  // Content Managers: backup-ai read+update (wildcard edit), no delete on courses
+  // Content Managers hold backup-ai update by default, but: leads no delete, tokens view-only,
+  // releases none, leaves view-only, popup/AI/fees no delete.
   const cm = session(s.users[2]);
   const r = authoriseOps(
     [
       { op: 'replace', key: 'leads', items: [] },
+      { op: 'replace', key: 'admissionTokens2027', items: [{ id: 't1', status: 'Active' }] },
+      { op: 'upsert', key: 'admissionTokens2027', item: { id: 't1', status: 'Active', totalDiscount: 999999 } },
+      { op: 'set', key: 'versionManager', value: { releases: [] } },
+      { op: 'replace', key: 'leaveRequests', items: [] },
       { op: 'replace', key: 'users', items: [] },
       { op: 'delete', key: 'leaveRequests', id: 'l1' },
+      // What the role really manages still works, including a full replace.
+      { op: 'replace', key: 'notices', items: [] },
+      { op: 'upsert', key: 'leads', item: { id: 'lead-new', name: 'x' } },
     ],
     cm,
     s
   );
-  assert.deepEqual(r.allowedIndexes, [0]);
+  assert.deepEqual(r.allowedIndexes, [7, 8]);
+});
+
+test('leads are readable only with the leads permission (tokens access is not enough)', () => {
+  // Coordinators / Teachers: leads none, tokens view.
+  assert.equal(canViewKey('Coordinators / Teachers', 'leads', DEFAULT_RBAC_MATRIX), false);
+  assert.equal(canViewKey('Coordinators / Teachers', 'admissionTokens2027', DEFAULT_RBAC_MATRIX), true);
+  assert.equal(canViewKey('Principal / Vice Principal', 'leads', DEFAULT_RBAC_MATRIX), true);
+  // Principal: no releases access, so the release history (with its snapshots) can be neither read nor replaced.
+  assert.equal(canViewKey('Principal / Vice Principal', 'versionManager', DEFAULT_RBAC_MATRIX), false);
+  assert.equal(canReplaceKey('Principal / Vice Principal', 'versionManager', DEFAULT_RBAC_MATRIX), false);
+  assert.equal(canReplaceKey('Principal / Vice Principal', 'notices', DEFAULT_RBAC_MATRIX), true);
+  assert.equal(canReplaceKey('Super Admin', 'users', DEFAULT_RBAC_MATRIX), true);
+});
+
+test('self-profile edit cannot claim a signatory slot', () => {
+  const s = state();
+  const teacher = s.users[1];
+  const r = authoriseOps(
+    [{ op: 'upsert', key: 'users', item: { ...teacher, signatorySlot: 'chairman' } as never }],
+    session(teacher),
+    s
+  );
+  assert.match(r.rejected[0].reason, /signatorySlot/);
 });
 
 test('changedUserFields ignores credential fields and undefined values', () => {

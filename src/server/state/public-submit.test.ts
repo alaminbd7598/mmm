@@ -75,11 +75,11 @@ test('full admission form lead stays New but is marked Hot', () => {
   assert.equal(lead.priority, 'Hot');
 });
 
-test('lead with a known phone is merged as a note, keeping staff fields', () => {
+test('the same student on a known phone is merged as a note, keeping staff fields', () => {
   const plan = planPublicSubmit(
     items([
-      { key: 'leads', item: { name: 'Again', phone: '01711000000', message: 'second try', source: 'Registration Form' } },
-      { key: 'leads', item: { name: 'Third', phone: '017-1100-0000', source: 'Quick Inquiry' } },
+      { key: 'leads', item: { name: 'Old (অভিভাবক: Karim)', phone: '01711000000', message: 'second try', source: 'Registration Form' } },
+      { key: 'leads', item: { name: ' old ', phone: '০১৭-১১০০-০০০০', source: 'Quick Inquiry' } },
     ]),
     state(),
     ctx()
@@ -139,4 +139,63 @@ test('career applications bind to the candidate session and refuse closed jobs',
   }
   const closed = planPublicSubmit(items([{ key: 'careerApplications', item: { ...app, jobId: 'job-2' } }]), state(), ctx());
   assert.equal(closed.ok, false);
+});
+
+test('a sibling on the same guardian phone gets a lead of its own, linked by a note', () => {
+  const plan = planPublicSubmit(
+    items([
+      {
+        key: 'leads',
+        item: {
+          name: 'Sibling Two',
+          phone: '01711000000',
+          source: 'Full Admission Form',
+          detailedData: { studentNameEn: 'Sibling Two', fatherMobile: '01711000000', targetClass: 'Class 2' },
+        },
+      },
+    ]),
+    state(),
+    ctx()
+  );
+  assert.ok(plan.ok);
+  if (!plan.ok) return;
+  const lead = upserts(plan.ops)[0].item as unknown as AdmissionLead;
+  assert.notEqual(lead.id, 'lead-old');
+  assert.equal(lead.detailedData?.targetClass, 'Class 2', 'the full form is kept, not reduced to a note');
+  assert.match(lead.notes?.at(-1)?.text || '', /lead-old/);
+  assert.deepEqual(plan.ops.at(-1), { op: 'order', key: 'leads', ids: [lead.id] });
+});
+
+test('a second, different full form for the same student never replaces or drops the first', () => {
+  const withForm = {
+    ...existingLead,
+    detailedData: { studentNameEn: 'Old', targetClass: 'Class 1' },
+  } as unknown as AdmissionLead;
+  const base = { ...state(), leads: [withForm] } as CMSState;
+  const resubmit = (targetClass: string) =>
+    planPublicSubmit(
+      items([{ key: 'leads', item: { name: 'Old', phone: '01711000000', source: 'Full Admission Form', detailedData: { studentNameEn: 'Old', targetClass } } }]),
+      base,
+      ctx()
+    );
+  const different = resubmit('Class 5');
+  assert.ok(different.ok);
+  if (different.ok) {
+    const lead = upserts(different.ops)[0].item as unknown as AdmissionLead;
+    assert.notEqual(lead.id, 'lead-old');
+    assert.equal(lead.detailedData?.targetClass, 'Class 5');
+  }
+  const identical = resubmit('Class 1');
+  assert.ok(identical.ok);
+  if (identical.ok) assert.deepEqual(identical.ids, ['lead-old']);
+});
+
+test('phones in Bengali digits and landlines are accepted; junk is not', () => {
+  const lead = (phone: string) => parsePublicSubmit({ items: [{ key: 'leads', item: { name: 'N', phone, source: 'Quick Inquiry' } }] });
+  const bengali = lead('০১৭১২৩৪৫৬৭৮');
+  assert.ok(bengali.ok);
+  if (bengali.ok && bengali.items[0].key === 'leads') assert.equal(bengali.items[0].item.phone, '01712345678');
+  assert.ok(lead('02-8912345').ok);
+  assert.equal(lead('abcdef').ok, false);
+  assert.equal(lead('12345').ok, false);
 });
