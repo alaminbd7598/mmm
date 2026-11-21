@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
 import { AccessibilityToolbar } from './AccessibilityToolbar';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 import { AdminRole } from '../types/cms';
 import { isValidExternalPortalUrl, resolveExternalPortals } from '../utils/portalAndHifzLogic';
 import { ChangePasswordDialog } from './ChangePasswordDialog';

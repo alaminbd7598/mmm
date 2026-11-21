@@ -47,7 +47,6 @@ import {
   X,
 } from 'lucide-react';
 import { generateAdmissionPDF } from '../utils/pdfExport';
-import { exportRegistrationsToCSV } from '../utils/exportUtils';
 import { validateNewPassword } from '../utils/passwordPolicy';
 import { useCMS } from '../store/useCMSStore';
 import { MIN_PASSWORD_LENGTH } from '../server/contracts';
@@ -74,7 +73,7 @@ import {
   hasRolePermission,
   toBengaliDigits,
 } from '../utils/cmsLogic';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 import { EnrollmentTrendsChart } from './EnrollmentTrendsChart';
 import { AccessibilityToolbar } from './AccessibilityToolbar';
 import { AdminMadrasahInfographicsTab } from './AdminMadrasahInfographicsTab';
@@ -154,11 +153,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
 
   const versionManagerConfig = resolveVersionManagerConfig(state.versionManager);
   const showAdminVersionBadge = shouldShowAdminVersion(versionManagerConfig);
-  const activeReleaseEntry =
-    versionManagerConfig.releases.find(
-      (r) => r.version === versionManagerConfig.activeVersion && !r.isAutoBackup
-    ) || versionManagerConfig.releases[0];
-
   const tr = (bn: string, en: string, ar: string) =>
     language === 'en' ? en : language === 'ar' ? ar : bn;
   const loc = (text?: string) => (text ? localizeDynamicText(text, language) : '');

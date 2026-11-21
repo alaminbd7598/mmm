@@ -481,7 +481,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
 
   const formContent = (
     <div className="w-full max-w-5xl mx-auto space-y-6" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-      {/* Top Banner Card matching craftinternationalinstitute.com ভর্তি ফরম */}
+      {/* Top Banner Card */}
       <div className="relative rounded-3xl bg-gradient-to-br from-[#f3e7ff] via-[#e9d5ff] to-[#f5d0fe] dark:from-[#2e054e] dark:via-[#3b0764] dark:to-[#4c0575] border border-purple-200 dark:border-purple-700/50 shadow-xl overflow-hidden px-6 py-8 sm:px-10 sm:py-10 text-center">
         {/* Top Rainbow / Purple-Pink Accent Bar */}
         <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-[#ec4899] via-[#a855f7] to-[#6366f1]" />
@@ -820,7 +820,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
           </div>
         ) : (
           <>
-            {/* 6-Step Circular Icon Stepper matching craftinternationalinstitute.com */}
+            {/* 6-Step Circular Icon Stepper */}
             <div className="px-3 sm:px-6 pt-5 sm:pt-7 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="relative flex items-center justify-between max-w-3xl mx-auto overflow-x-auto no-scrollbar py-1">
                 {/* Connecting Background Line */}

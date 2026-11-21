@@ -27,7 +27,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 
 type TimeframeOption = '6m' | '1y' | 'all';
 type ChartViewMode = 'area' | 'bar';

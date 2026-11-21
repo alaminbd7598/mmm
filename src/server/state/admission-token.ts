@@ -51,7 +51,7 @@ export type TokenApplyPlan =
   | { ok: false; status: number; code: string; error: string };
 
 /**
- * Mark a token Applied (same fields as the store's markAdmissionTokenApplied). The contact must
+ * Mark a token Applied. The contact must
  * match the token exactly as the lookup does. A `leadId` is linked only when that lead carries
  * the same phone number, so visitors cannot attach tokens to other people's leads.
  */

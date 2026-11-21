@@ -288,7 +288,6 @@ export const AdminVirtualOfficeTab: React.FC = () => {
   // Keep the form in sync with the store while there are no unsaved edits.
   useEffect(() => {
     if (!dirty) setDraft(fillBlankCredentials(storeCfg, secureRef.current));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCfg]);
 
   const loadSecureConfig = async (announce: boolean) => {
@@ -327,7 +326,6 @@ export const AdminVirtualOfficeTab: React.FC = () => {
     return () => {
       mountedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const patch = (p: Partial<VirtualOfficeConfig>) => {

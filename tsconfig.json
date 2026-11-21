@@ -10,7 +10,6 @@
     "moduleResolution": "bundler",
     "moduleDetection": "force",
     "jsx": "react-jsx",
-    "allowJs": true,
     "skipLibCheck": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
@@ -18,8 +17,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "incremental": true,
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false,
     "plugins": [
       {
         "name": "next"
@@ -41,7 +38,6 @@
   ],
   "exclude": [
     "node_modules",
-    ".next",
-    "dist"
+    ".next"
   ]
 }

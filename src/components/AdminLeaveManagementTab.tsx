@@ -49,7 +49,7 @@ import {
   validateLeaveRequestInput,
 } from '../utils/cmsLogic';
 import { generateLeaveApprovalPDF } from '../utils/pdfExport';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 
 export const AdminLeaveManagementTab: React.FC = () => {
   const {

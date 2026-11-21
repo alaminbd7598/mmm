@@ -8,13 +8,13 @@ const isProduction = process.env.NODE_ENV === 'production';
  */
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://apis.google.com",
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https: http:",
   "media-src 'self' data: blob: https: http:",
   "connect-src 'self' https:",
-  "frame-src 'self' blob: https://www.youtube.com https://www.youtube-nocookie.com https://www.facebook.com https://web.facebook.com https://www.google.com https://maps.google.com https://player.vimeo.com https://drive.google.com https://*.firebaseapp.com",
+  "frame-src 'self' blob: https://www.youtube.com https://www.youtube-nocookie.com https://www.facebook.com https://web.facebook.com https://www.google.com https://maps.google.com https://player.vimeo.com https://drive.google.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

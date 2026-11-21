@@ -21,7 +21,6 @@ import {
   CourseItem,
   DayCareRoutineConfig,
   DepartmentVideoItem,
-  DetailedAdmissionData,
   EducationMethodConfig,
   EmailNotificationLog,
   EventItem,
@@ -29,7 +28,6 @@ import {
   GuardianComplaintItem,
   GuardianReelItem,
   HafizGraduateItem,
-  HifzTreeConfig,
   InstitutionalCalendarEvent,
   LeadCallLog,
   LeadNoteItem,
@@ -51,7 +49,6 @@ import {
   VirtualOfficeConfig,
   VirtualOfficeSession,
   VirtualOfficeSessionStatus,
-  WhatsAppBotConfig,
 } from '../types/cms';
 import {
   SemverBumpType,
@@ -156,7 +153,6 @@ interface CMSContextType {
   currentUser: AdminUser | null;
   theme: ThemeMode;
   toggleTheme: () => void;
-  setTheme: (theme: ThemeMode) => void;
   language: AppLanguage;
   setLanguage: (lang: AppLanguage) => void;
   fontSize: FontSizeLevel;
@@ -168,7 +164,6 @@ interface CMSContextType {
   pushToast: (title: string, description: string, type?: 'success' | 'info' | 'email') => void;
   // Live Deployment Server Sync
   liveSyncStatus: LiveSyncStatus;
-  syncLocalToLiveServer: (silent?: boolean) => Promise<boolean>;
   pullFromLiveServer: (silent?: boolean) => Promise<boolean>;
   enableAllWebsiteSections: () => void;
   // Auth & Personal Staff Profile Vault
@@ -262,7 +257,6 @@ interface CMSContextType {
     rawText: string,
     sourceTag?: string
   ) => { newCount: number; duplicatesCount: number; invalidCount: number };
-  updateLeadDetailedAdmission: (leadId: string, detailedData: DetailedAdmissionData) => void;
   updateLeadChecklist: (
     leadId: string,
     checklistPatch: Partial<NonNullable<AdmissionLead['checklist']>>
@@ -308,7 +302,6 @@ interface CMSContextType {
   updateSettings: (settings: SiteSettings) => void;
   updatePopupConfig: (popupConfig: PopupNoticeConfig) => void;
   updateAIBotConfig: (aiBotConfig: AIBotConfig) => void;
-  updateWhatsAppConfig: (whatsappConfig: WhatsAppBotConfig) => void;
   updateFeeCalculatorConfig: (feeCalculatorConfig: FeeCalculatorConfig) => void;
   // Video & Media Showcases CRUD
   updateCampusVideo: (campusVideo: CampusVideoConfig) => void;
@@ -321,7 +314,6 @@ interface CMSContextType {
   deleteGuardianReel: (id: string) => void;
   clearAllVideoLinks: () => void;
   // Hifzul Quran Tree & Categorized Photo Gallery CRUD
-  updateHifzTreeConfig: (config: HifzTreeConfig) => void;
   addHafizGraduate: (item: Omit<HafizGraduateItem, 'id'>) => void;
   updateHafizGraduate: (item: HafizGraduateItem) => void;
   deleteHafizGraduate: (id: string) => void;
@@ -346,7 +338,7 @@ interface CMSContextType {
     adminReply?: string
   ) => void;
   deleteComplaint: (id: string) => void;
-  applyTargetInstitutionPreset: (preset: 'maharat' | 'craft') => void;
+  applyTargetInstitutionPreset: () => void;
   // Version & Release Manager + Snapshot Rollback
   updateVersionVisibility: (
     patch: Partial<
@@ -378,7 +370,6 @@ interface CMSContextType {
   addCalendarEvent: (ev: Omit<InstitutionalCalendarEvent, 'id'>) => InstitutionalCalendarEvent;
   updateCalendarEvent: (ev: InstitutionalCalendarEvent) => void;
   deleteCalendarEvent: (id: string) => void;
-  mergeGoogleCalendarEvents: (incoming: InstitutionalCalendarEvent[]) => number;
   // Mobile App-Style Bottom Bar Config
   updateMobileBottomBar: (config: MobileBottomBarConfig) => void;
   // Virtual Office / Hybrid Live Desk Config & Sessions
@@ -398,7 +389,7 @@ export const CMSProvider: React.FC<{
   /** Public content rendered into the page by the server, for a first paint with live data. */
   initialPublicState?: Partial<CMSState> | null;
 }> = ({ children, initialPublicState }) => {
-  const { theme, setTheme, toggleTheme } = useTheme();
+  const { theme, toggleTheme } = useTheme();
 
   const [state, setState] = useState<CMSState>(() => {
     provideInitialPublicState(initialPublicState);
@@ -1482,45 +1473,6 @@ export const CMSProvider: React.FC<{
     };
   };
 
-  const updateLeadDetailedAdmission = (leadId: string, detailedData: DetailedAdmissionData) => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    setState((prev) => ({
-      ...prev,
-      leads: prev.leads.map((l) => {
-        if (l.id !== leadId) return l;
-        const notes = l.notes || [];
-        return {
-          ...l,
-          detailedData,
-          status: 'Admitted',
-          priority: 'Hot',
-          admissionChancePercent: 100,
-          notes: [
-            ...notes,
-            {
-              id: `note-${Date.now()}`,
-              authorName: currentUser?.fullName || 'Admin',
-              timestamp: nowFormatted,
-              text: 'অফিস থেকে শিক্ষার্থীর ৬-ধাপের পূর্ণাঙ্গ ভর্তি ফর্ম ও তথ্য সফলভাবে সম্পন্ন করা হয়েছে।',
-            },
-          ],
-        };
-      }),
-    }));
-
-    pushToast(
-      tr('পূর্ণাঙ্গ ভর্তি ফর্ম সংরক্ষিত হয়েছে!', 'Full Admission Completed!', 'تم استكمال بيانات القبول بنجاح!'),
-      tr('শিক্ষার্থীর তথ্য Admitted ধাপে উন্নীত করা হয়েছে।', 'Student moved to Admitted status.', 'تم نقل الطالب إلى المقبولين.')
-    );
-  };
-
   const updateLeadCourse = (leadId: string, newCourseId: string) => {
     const newCourseTitle = resolveCourseTitle(state.courses, newCourseId);
     setState((prev) => ({
@@ -1904,18 +1856,6 @@ export const CMSProvider: React.FC<{
     );
   };
 
-  const updateWhatsAppConfig = (whatsappConfig: WhatsAppBotConfig) => {
-    setState((prev) => ({ ...prev, whatsappConfig }));
-    pushToast(
-      tr('হোয়াটসঅ্যাপ বট সংরক্ষিত', 'WhatsApp Bot Saved', 'تم حفظ إعدادات واتساب'),
-      tr(
-        'হোয়াটসঅ্যাপ বট ও কুইক টপিকসমূহ সফলভাবে আপডেট করা হয়েছে।',
-        'WhatsApp bot & quick inquiry topics updated.',
-        'تم تحديث بوت واتساب والمواضيع السريعة بنجاح.'
-      )
-    );
-  };
-
   const updateFeeCalculatorConfig = (feeCalculatorConfig: FeeCalculatorConfig) => {
     setState((prev) => ({ ...prev, feeCalculatorConfig }));
     pushToast(
@@ -2037,18 +1977,6 @@ export const CMSProvider: React.FC<{
         'تم مسح جميع روابط الفيديو. يمكنك إضافة روابط جديدة في أي وقت من لوحة التحكم.'
       ),
       'info'
-    );
-  };
-
-  const updateHifzTreeConfig = (hifzTreeConfig: HifzTreeConfig) => {
-    setState((prev) => ({ ...prev, hifzTreeConfig }));
-    pushToast(
-      tr('হিফজুল কুরআন ট্রি আপডেট হয়েছে', 'Hifzul Quran Tree Updated', 'تم تحديث شجرة حفاظ القرآن'),
-      tr(
-        'হাফেজদের বংশবৃক্ষ ও সম্মাননা তথ্য সংরক্ষিত হয়েছে।',
-        'Hifzul Quran lineage and graduate records saved.',
-        'تم حفظ بيانات حفاظ القرآن الكريم بنجاح.'
-      )
     );
   };
 
@@ -2325,70 +2253,20 @@ export const CMSProvider: React.FC<{
     );
   };
 
-  const applyTargetInstitutionPreset = (preset: 'maharat' | 'craft') => {
-    if (preset === 'maharat') {
-      setState((prev) => buildMaharatModelMadrasahPreset(prev));
-      pushToast(
-        tr(
-          'মাহারাত মডেল মাদ্রাসা প্রিসেট চালু হয়েছে!',
-          'Maharat Model Madrasah Preset Activated!',
-          'تم تفعيل إعدادات مدرسة مهارات النموذجية!'
-        ),
-        tr(
-          'ওয়েবসাইটের নাম, স্লোগান, উত্তরা সেক্টর ১২ ঠিকানা, ফোন ও প্রেক্ষাপট মাহারাত মডেল মাদ্রাসায় রূপান্তরিত হয়েছে।',
-          'Branding, slogan, Uttara Sector 12 address, phone, and context switched to Maharat Model Madrasah.',
-          'تم تحويل العلامة التجارية والعنوان والبيانات إلى مدرسة مهارات النموذجية.'
-        )
-      );
-    } else {
-      setState((prev) => ({
-        ...prev,
-        settings: INITIAL_CMS_STATE.settings,
-        madrasahContextConfig: {
-          ...prev.madrasahContextConfig,
-          activePresetId: 'craft',
-        },
-      }));
-      pushToast(
-        tr(
-          'ক্রাফট ইনস্টিটিউট প্রিসেট চালু হয়েছে!',
-          'Craft International Institute Preset Restored!',
-          'تم تفعيل إعدادات معهد كرافت الدولي!'
-        ),
-        tr(
-          'ওয়েবসাইটের ব্র্যান্ডিং ক্রাফট ইন্টারন্যাশনাল ইনস্টিটিউটে ফিরিয়ে আনা হয়েছে।',
-          'Website branding restored to Craft International Institute.',
-          'تمت استعادة العلامة التجارية لمعهد كرافت الدولي.'
-        )
-      );
-    }
-  };
-
-  const syncLocalToLiveServer = async (silent: boolean = false): Promise<boolean> => {
-    const ok = await sync.flush();
-    if (!silent) {
-      if (ok) {
-        pushToast(
-          tr(
-            'লাইভ সার্ভারে সকল তথ্য সিঙ্ক হয়েছে!',
-            'All Data Synced to Live Server!',
-            'تمت مزامنة جميع البيانات مع الخادم المباشر!'
-          ),
-          tr(
-            'সকল তথ্য সার্ভারে সংরক্ষিত হয়েছে; এখন যেকোনো ডিভাইস থেকে ওয়েবসাইটে সর্বশেষ তথ্য দেখা যাবে।',
-            'All local and deployment updates are now live and accessible to everyone via the shared URL.',
-            'جميع التحديثات متاحة الآن مباشرة للجميع عبر الرابط المشترك.'
-          )
-        );
-      } else {
-        pushToast(
-          tr('সার্ভার সিঙ্ক ব্যর্থ হয়েছে', 'Live Server Sync Failed', 'فشلت المزامنة مع الخادم'),
-          tr('অনুগ্রহ করে ইন্টারনেট কানেকশন বা সার্ভার স্ট্যাটাস চেক করুন।', 'Please verify server connection.', 'يرجى التحقق من الاتصال بالخادم.'),
-          'info'
-        );
-      }
-    }
-    return ok;
+  const applyTargetInstitutionPreset = () => {
+    setState((prev) => buildMaharatModelMadrasahPreset(prev));
+    pushToast(
+      tr(
+        'মাহারাত মডেল মাদ্রাসা প্রিসেট চালু হয়েছে!',
+        'Maharat Model Madrasah Preset Activated!',
+        'تم تفعيل إعدادات مدرسة مهارات النموذجية!'
+      ),
+      tr(
+        'ওয়েবসাইটের নাম, স্লোগান, উত্তরা সেক্টর ১২ ঠিকানা, ফোন ও প্রেক্ষাপট মাহারাত মডেল মাদ্রাসায় রূপান্তরিত হয়েছে।',
+        'Branding, slogan, Uttara Sector 12 address, phone, and context switched to Maharat Model Madrasah.',
+        'تم تحويل العلامة التجارية والعنوان والبيانات إلى مدرسة مهارات النموذجية.'
+      )
+    );
   };
 
   const pullFromLiveServer = async (silent: boolean = false): Promise<boolean> => {
@@ -2696,29 +2574,6 @@ export const CMSProvider: React.FC<{
     );
   };
 
-  const mergeGoogleCalendarEvents = (incoming: InstitutionalCalendarEvent[]): number => {
-    const existing = stateRef.current.calendarEvents || [];
-    const existingKeys = new Set(
-      existing.map((e) => e.googleEventId || `${e.date}::${e.titleEn.toLowerCase()}`)
-    );
-    const uniqueNew = incoming.filter((e) => {
-      const key = e.googleEventId || `${e.date}::${e.titleEn.toLowerCase()}`;
-      if (existingKeys.has(key)) return false;
-      existingKeys.add(key);
-      return true;
-    });
-
-    if (uniqueNew.length > 0) {
-      setState((prev) => ({
-        ...prev,
-        calendarEvents: [...(prev.calendarEvents || []), ...uniqueNew].sort((a, b) =>
-          a.date.localeCompare(b.date)
-        ),
-      }));
-    }
-    return uniqueNew.length;
-  };
-
   // --- Mobile App-Style Bottom Bar Config ---
   const updateMobileBottomBar = (config: MobileBottomBarConfig) => {
     setState((prev) => ({
@@ -2789,7 +2644,6 @@ export const CMSProvider: React.FC<{
         currentUser,
         theme,
         toggleTheme,
-        setTheme,
         language,
         setLanguage,
         fontSize,
@@ -2800,7 +2654,6 @@ export const CMSProvider: React.FC<{
         dismissToast,
         pushToast,
         liveSyncStatus,
-        syncLocalToLiveServer,
         pullFromLiveServer,
         enableAllWebsiteSections,
         login,
@@ -2838,7 +2691,6 @@ export const CMSProvider: React.FC<{
         scheduleLeadFollowUp,
         updateLeadPriority,
         bulkImportLeads,
-        updateLeadDetailedAdmission,
         updateLeadChecklist,
         updateLeadCounselor,
         addCareerJob,
@@ -2858,7 +2710,6 @@ export const CMSProvider: React.FC<{
         updateSettings,
         updatePopupConfig,
         updateAIBotConfig,
-        updateWhatsAppConfig,
         updateFeeCalculatorConfig,
         updateCampusVideo,
         updateDepartmentVideo,
@@ -2869,7 +2720,6 @@ export const CMSProvider: React.FC<{
         updateGuardianReel,
         deleteGuardianReel,
         clearAllVideoLinks,
-        updateHifzTreeConfig,
         addHafizGraduate,
         updateHafizGraduate,
         deleteHafizGraduate,
@@ -2902,7 +2752,6 @@ export const CMSProvider: React.FC<{
         addCalendarEvent,
         updateCalendarEvent,
         deleteCalendarEvent,
-        mergeGoogleCalendarEvents,
         updateMobileBottomBar,
         updateVirtualOfficeConfig,
         recordLocalVirtualOfficeSession,

@@ -461,11 +461,23 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800" data-testid="career-status-results">
               {trackedApplications.length === 0 ? (
                 <p className="text-sm text-rose-600 dark:text-rose-400 font-semibold">
-                  {tr(
-                    'এই মোবাইল, হোয়াটসঅ্যাপ বা ইমেইলের বিপরীতে কোনো আবেদন পাওয়া যায়নি।',
-                    'No application found matching this phone, WhatsApp, or email.',
-                    'لم يتم العثور على طلب مطابق لهذه البيانات.'
-                  )}
+                  {statusLookupFailed === 'rate-limited'
+                    ? tr(
+                        'অল্প সময়ে অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।',
+                        'Too many attempts in a short time. Please try again in a little while.',
+                        'محاولات كثيرة في وقت قصير. يرجى المحاولة مرة أخرى بعد قليل.'
+                      )
+                    : statusLookupFailed === 'error'
+                    ? tr(
+                        'এই মুহূর্তে আবেদনের অবস্থা দেখা যাচ্ছে না। অনুগ্রহ করে একটু পরে আবার চেষ্টা করুন।',
+                        'The application status cannot be checked right now. Please try again shortly.',
+                        'تعذّر التحقق من حالة الطلب الآن. يرجى المحاولة مرة أخرى بعد قليل.'
+                      )
+                    : tr(
+                        'এই মোবাইল, হোয়াটসঅ্যাপ বা ইমেইলের বিপরীতে কোনো আবেদন পাওয়া যায়নি।',
+                        'No application found matching this phone, WhatsApp, or email.',
+                        'لم يتم العثور على طلب مطابق لهذه البيانات.'
+                      )}
                 </p>
               ) : (
                 <div className="grid sm:grid-cols-2 gap-3">

@@ -91,8 +91,8 @@ const renderPeriodHeaderIcon = (iconType: 'morning' | 'noon' | 'afternoon' | 'ni
 };
 
 /**
- * Normalizes any legacy brown track colors stored in localStorage to Craft International Institute's
- * signature Royal Purple, Fuchsia, and Gold brand palette.
+ * Normalizes any legacy brown track colors in stored content to the Royal Purple, Fuchsia and Gold
+ * brand palette.
  */
 function resolveBrandTrackStyles(trackId: string, rawBg: string, rawText: string, rawDot: string) {
   if (trackId === 'track-quran' || rawBg === '#4E2A14') {
@@ -425,7 +425,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
     <div className="space-y-0" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       {/* =====================================================================
           SCREENSHOT 1: শিক্ষা পদ্ধতি ৫০/৫০ ও স্তরভেদে বিষয়ের ভারসাম্য
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showEducationMethod && educationMethodConfig.enabled && (
         <section
@@ -445,7 +445,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
                   {localizeDynamicText(educationMethodConfig.sectionTitleBn, language)}
                 </h2>
 
-                {/* Giant ৫০/৫০ Graphic in Craft International Institute Royal Purple & Gold */}
+                {/* Giant ৫০/৫০ Graphic in Royal Purple & Gold */}
                 <div
                   className="flex items-baseline select-none leading-none py-2"
                   aria-label={`${localizeDigits(educationMethodConfig.ratioLeftBn, language)}/${localizeDigits(educationMethodConfig.ratioRightBn, language)}`}
@@ -635,7 +635,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
 
       {/* =====================================================================
           SCREENSHOT 2: নার্সারি থেকে একাদশ, তিন স্তরে (১০ বছরের পাঠ পরিকল্পনা)
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showTenYearPlan && tenYearPlanConfig.enabled && (
         <section
@@ -812,7 +812,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
 
       {/* =====================================================================
           SCREENSHOT 3: হিফজ ডে-কেয়ারের একটি দিন ও ধাপভেদে মাদরাসার সময়
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showDayCareRoutine && dayCareRoutineConfig.enabled && (
         <section
@@ -955,7 +955,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
 
       {/* =====================================================================
           SCREENSHOT 4: নিজস্ব পরিবহন (রুট ম্যাপ, দূরত্ব, ভাড়া ও মেট্রোরেল ল্যান্ডমার্ক)
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showTransport && transportConfig.enabled && (
         <section
@@ -1164,7 +1164,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
 
       {/* =====================================================================
           ADDITIONAL COMPONENT 1: ডে-কেয়ার বনাম নন-ডে-কেয়ার ফি তুলনা, ভাইবোন ছাড় ও বয়সসীমা
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showAdmissionExtra && admissionExtraConfig.enabled && (
         <section
@@ -1317,7 +1317,7 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
 
       {/* =====================================================================
           ADDITIONAL COMPONENT 2: মাদ্রাসা প্রতিষ্ঠার প্রেক্ষাপট, লক্ষ্য-উদ্দেশ্য ও ইউনিফর্ম গাইড
-          (Styled in Craft International Institute Royal Purple, Fuchsia & Gold)
+          (Styled in Royal Purple, Fuchsia & Gold)
          ===================================================================== */}
       {showAboutContext && madrasahContextConfig.enabled && (
         <section

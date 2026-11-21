@@ -25,7 +25,7 @@ import {
   TransportRouteItem,
   UniformGuideConfig,
 } from '../types/cms';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 import { hasRolePermission } from '../utils/cmsLogic';
 
 type SubTabId =
@@ -93,17 +93,17 @@ export const AdminMadrasahInfographicsTab: React.FC = () => {
   );
 
   // Sync local drafts when preset changes
-  const handlePresetSwitch = (preset: 'maharat' | 'craft') => {
+  const handlePresetSwitch = () => {
     if (!canEdit) return;
-    applyTargetInstitutionPreset(preset);
+    applyTargetInstitutionPreset();
     setTimeout(() => {
-      setContextDraft((prev) => ({ ...prev, activePresetId: preset }));
+      setContextDraft((prev) => ({ ...prev, activePresetId: 'maharat' }));
     }, 50);
   };
 
   return (
     <div className="space-y-6" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-      {/* Top Banner: Craft International Institute Royal Purple, Fuchsia & Gold Gradient */}
+      {/* Top Banner: Royal Purple, Fuchsia & Gold Gradient */}
       <div className="bg-gradient-to-r from-[#2e0249] via-[#4c0575] to-[#2e0249] text-white rounded-2xl p-6 shadow-xl border border-purple-500/30 relative overflow-hidden">
         <div className="absolute -right-12 -top-12 w-44 h-44 rounded-full bg-fuchsia-500/15 blur-2xl pointer-events-none" />
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative z-10">
@@ -138,7 +138,7 @@ export const AdminMadrasahInfographicsTab: React.FC = () => {
             <button
               type="button"
               disabled={!canEdit}
-              onClick={() => handlePresetSwitch('maharat')}
+              onClick={handlePresetSwitch}
               className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer flex items-center gap-2 ${
                 state.madrasahContextConfig.activePresetId === 'maharat'
                   ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-purple-950 shadow-md ring-2 ring-white'

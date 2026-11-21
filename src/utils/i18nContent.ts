@@ -823,10 +823,6 @@ const EXACT_TEXT_MAP: Record<string, { en: string; ar: string }> = {
   },
 
   // Site Settings & Contact Strings
-  'ক্রাফট ইন্টারন্যাশনাল ইনস্টিটিউট': {
-    en: 'Craft International Institute',
-    ar: 'معهد كرافت الدولي (Craft International Institute)',
-  },
   'ইসলামি ও আধুনিক শিক্ষার সমন্বয়ে স্কিলস বেইসড শিক্ষা কারিকুলাম নিয়ে বাংলাদেশে আমরাই প্রথম..!!': {
     en: 'Bangladesh’s First Integrated Islamic & Modern Skills-Based Educational Curriculum!',
     ar: 'الأول في بنغلاديش بمنهج تعليمي متكامل يجمع بين العلوم الإسلامية والمهارات الحديثة!',

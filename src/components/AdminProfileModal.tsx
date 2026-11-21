@@ -177,7 +177,6 @@ export const AdminProfileModal: React.FC<{
     sigBeforePadRef.current = '';
     drawingRef.current = false;
     lastPointRef.current = null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, userId]);
 
   // Escape to close, background scroll lock, and initial focus.
