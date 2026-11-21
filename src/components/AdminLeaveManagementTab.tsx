@@ -1631,9 +1631,9 @@ export const AdminRBACMatrixSection: React.FC = () => {
         ar: 'المكتب الافتراضي والمكتب المباشر',
       },
       calendar: {
-        bn: 'প্রাতিষ্ঠানিক ক্যালেন্ডার ও Google Sync (Calendar)',
-        en: 'Institutional Calendar & Google Sync',
-        ar: 'التقويم المؤسسي ومزامنة جوجل',
+        bn: 'প্রাতিষ্ঠানিক ক্যালেন্ডার (Calendar)',
+        en: 'Institutional Calendar',
+        ar: 'التقويم المؤسسي',
       },
       blog: {
         bn: 'ব্লগ ও অটো-পোস্টিং API (Blog & Auto-Posting)',

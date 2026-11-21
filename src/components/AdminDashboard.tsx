@@ -590,7 +590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
         },
         {
           id: 'calendar',
-          label: tr('প্রাতিষ্ঠানিক ক্যালেন্ডার (Google Sync)', 'Academic Calendar (Google)', 'التقويم المؤسسي'),
+          label: tr('প্রাতিষ্ঠানিক ক্যালেন্ডার', 'Academic Calendar', 'التقويم المؤسسي'),
           icon: Calendar,
         },
         {

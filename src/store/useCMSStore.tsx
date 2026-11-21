@@ -366,7 +366,7 @@ interface CMSContextType {
   updateBlogPost: (post: BlogPostItem) => void;
   deleteBlogPost: (id: string) => void;
   updateBlogAutomationConfig: (config: BlogAutomationConfig) => void;
-  // Institutional Academic Calendar CRUD + Google Sync
+  // Institutional Academic Calendar CRUD
   addCalendarEvent: (ev: Omit<InstitutionalCalendarEvent, 'id'>) => InstitutionalCalendarEvent;
   updateCalendarEvent: (ev: InstitutionalCalendarEvent) => void;
   deleteCalendarEvent: (id: string) => void;
@@ -2534,7 +2534,7 @@ export const CMSProvider: React.FC<{
     );
   };
 
-  // --- Institutional Academic Calendar CRUD + Google Sync ---
+  // --- Institutional Academic Calendar CRUD ---
   const addCalendarEvent = (
     ev: Omit<InstitutionalCalendarEvent, 'id'>
   ): InstitutionalCalendarEvent => {
