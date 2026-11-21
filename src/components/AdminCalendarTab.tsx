@@ -166,17 +166,13 @@ export const AdminCalendarTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header & Google Calendar Sync Bar */}
+      {/* Header */}
       <div className="rounded-2xl bg-gradient-to-r from-[#0a1738] via-[#192f64] to-[#005a6e] p-6 text-white shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-[#f0c95e]">
               <CalendarIcon className="h-3.5 w-3.5" />
-              {tr(
-                'প্রাতিষ্ঠানিক ক্যালেন্ডার ও গুগল ক্যালেন্ডার সিঙ্ক',
-                'Institutional Academic Calendar & Live Google Sync',
-                'التقويم الأكاديمي والمزامنة مع تقويم Google'
-              )}
+              {tr('প্রাতিষ্ঠানিক একাডেমিক ক্যালেন্ডার', 'Institutional Academic Calendar', 'التقويم الأكاديمي للمؤسسة')}
             </div>
             <h2 className="mt-2 text-xl font-bold sm:text-2xl">
               {tr(
@@ -187,9 +183,9 @@ export const AdminCalendarTab: React.FC = () => {
             </h2>
             <p className="mt-1 text-xs text-slate-200 sm:text-sm">
               {tr(
-                'গুগল ক্যালেন্ডারের সাথে সরাসরি যুক্ত করুন, সরকারি ও ইসলামী ছুটি সিঙ্ক করুন এবং .ICS ফাইল ডাউনলোড করুন।',
-                'Connect Google Calendar to auto-fetch Bangladesh Govt & Islamic holidays, push institutional events with confirmation, or export .ICS.',
-                'اربط تقويم Google لجلب العطلات الرسمية والإسلامية ومزامنة الفعاليات.'
+                'সরকারি ও ইসলামী ছুটি এবং মাদ্রাসার অনুষ্ঠান এখানে যোগ করুন; .ICS ফাইল ডাউনলোড করে গুগল ক্যালেন্ডার বা ফোনের ক্যালেন্ডারে ইমপোর্ট করা যায়।',
+                'Add government and Islamic holidays and madrasah events here; download the .ICS file to import them into Google Calendar or a phone calendar.',
+                'أضف العطلات الرسمية والإسلامية وفعاليات المدرسة هنا؛ ويمكن تنزيل ملف ‎.ICS لاستيراده إلى تقويم Google أو تقويم الهاتف.'
               )}
             </p>
           </div>

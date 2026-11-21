@@ -23,10 +23,10 @@ RUN npm run build
 FROM node:22-bookworm-slim AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080 HOSTNAME=0.0.0.0
-RUN useradd --system --uid 1001 nextjs
 COPY --from=build /app/public ./public
-COPY --from=build --chown=nextjs /app/.next/standalone ./
-COPY --from=build --chown=nextjs /app/.next/static ./.next/static
-USER nextjs
+COPY --from=build --chown=node /app/.next/standalone ./
+COPY --from=build --chown=node /app/.next/static ./.next/static
+# The base image's unprivileged user.
+USER node
 EXPOSE 8080
 CMD ["node", "server.js"]

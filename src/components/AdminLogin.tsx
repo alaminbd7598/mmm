@@ -497,9 +497,9 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               </h2>
               <p className="text-xs sm:text-sm text-sky-100/85 leading-relaxed">
                 {tr(
-                  'ভর্তি সিআরএম, ২০২৭ এডমিশন টোকেন, ভার্চুয়াল লাইভ অফিস, প্রাতিষ্ঠানিক গুগল ক্যালেন্ডার, QR সার্টিফিকেট এবং ব্লগ প্রকাশনা—সবকিছু এক প্ল্যাটফর্মে।',
-                  'Manage Admissions CRM, 2027 Admission Tokens, Live Virtual Office, Google Calendar Sync, QR Hifz Certificates, and Multilingual Publishing from one secure hub.',
-                  'إدارة القبول، رموز القبول 2027، المكتب الافتراضي، وتقويم Google من منصة واحدة آمنة.'
+                  'ভর্তি সিআরএম, ২০২৭ এডমিশন টোকেন, ভার্চুয়াল লাইভ অফিস, প্রাতিষ্ঠানিক ক্যালেন্ডার, QR সার্টিফিকেট এবং ব্লগ প্রকাশনা—সবকিছু এক প্ল্যাটফর্মে।',
+                  'Manage Admissions CRM, 2027 Admission Tokens, Live Virtual Office, Academic Calendar, QR Hifz Certificates, and Multilingual Publishing from one secure hub.',
+                  'إدارة القبول، رموز القبول 2027، المكتب الافتراضي، والتقويم الأكاديمي من منصة واحدة آمنة.'
                 )}
               </p>
             </div>

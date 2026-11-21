@@ -2,8 +2,11 @@
 /**
  * End-to-end test of the production build (website + admin CMS + API) with Playwright/Chromium.
  *
- * Prerequisites: `npm run build`, and the `playwright` package with Chromium available
- * (globally or in node_modules; this script never installs browsers).
+ * Prerequisites (from a clean checkout):
+ *     npm install                       installs the `playwright` package (a devDependency)
+ *     npx playwright install chromium   once per machine; this script never installs browsers
+ *     npm run build
+ * Run with `npm run test:e2e` (options after `--`) or `node scripts/e2e/run.cjs`.
  *
  * Demo mode (in-memory store, no DATABASE_URL):
  *     node scripts/e2e/run.cjs
@@ -12,7 +15,7 @@
  * `CREATE DATABASE mmm_e2e`). --db-push creates the tables with a plain `prisma db push` first;
  * the script never drops or resets data:
  *     DATABASE_URL=mysql://user:pw@127.0.0.1:3306/mmm_e2e JWT_SECRET=<48 random chars> \
- *       node scripts/e2e/run.cjs --db-push
+ *       npm run test:e2e -- --db-push
  *
  * Options:
  *     --port=3300          port for the `next start` server this script spawns (default 3300)

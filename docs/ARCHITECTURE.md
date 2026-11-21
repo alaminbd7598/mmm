@@ -1,16 +1,43 @@
 # Architecture (Next.js + MySQL, dual mode)
 
-This document is the build contract for the migration from React/Vite/Express/JSON-file to
-Next.js App Router + Prisma/MySQL. Types and constants live in `src/server/contracts.ts`.
+The Maharat Model Madrasah website and admin CMS: Next.js App Router + Prisma/MySQL, with an
+in-memory demo mode when no database is configured. Types and constants shared by the server and
+the client store live in `src/server/contracts.ts`.
 
-## Goals and non-goals
+## Principles
 
-- The public website and admin CMS must look and behave exactly as before. The existing client
-  application (`src/App.tsx`, `src/components/**`, `src/store/**`) is kept and rendered client-only
-  through `src/app/[[...slug]]/page.tsx` → `src/app/ClientApp.tsx`. Do not restyle components.
-- Persistence moves from "whole JSON blob pushed by any browser" to a server-owned data store with
-  per-item writes, server-side authentication and RBAC.
-- One codebase deploys to Vercel, Google Cloud Run (Docker) and Hostinger Node.js hosting.
+- The public website and admin CMS are one client application (`src/App.tsx`,
+  `src/components/**`, `src/store/**`) rendered through `src/app/[[...slug]]/page.tsx` →
+  `src/app/ClientApp.tsx`. Only the 21 site pages and `/admin` render it; other paths are 404.
+- The server owns the data: per-item writes, server-side authentication and RBAC. Browsers never
+  push whole-state blobs.
+- One codebase deploys to Hostinger Node.js hosting, Vercel and Google Cloud Run (Docker).
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `src/app/` | Next.js entry: layout, catch-all page, SEO (`seo.ts`, `sitemap.ts`, `robots.ts`), API routes (`api/**/route.ts`) |
+| `src/server/` | Server-only code: data store (`db/`), auth (`auth/`), validation, RBAC and services (`state/`), AI helpers, rate limits |
+| `src/store/`, `src/lib/api/` | Client store, server sync (`store/sync/`) and typed API calls |
+| `src/components/` | Public pages and admin tabs |
+| `src/data/`, `src/server/db/seed-content.json` | Built-in content for demo mode and for seeding an empty database |
+| `src/utils/` | Pure logic shared by client and server (with unit tests) |
+| `prisma/schema.prisma`, `prisma.config.ts` | Database schema and Prisma CLI config |
+| `scripts/` | `prepare-db.mjs` (build step), `db-import.ts` (backup import), `e2e/run.cjs` (browser tests) |
+
+## Build
+
+`npm run build` runs three steps: `tsc --noEmit` (type check), `scripts/prepare-db.mjs` (with
+`DATABASE_URL`: `prisma db push`, which creates or updates the tables and refuses changes that
+would lose data; without it: nothing) and `next build`. The type check runs on its own, not inside
+`next build` (`typescript.ignoreBuildErrors`), and build workers are limited to one
+(`experimental.cpus`), so the two memory-heavy steps never overlap: the build peaks at about
+1.3 GB (measured in a memory-limited cgroup: passes at 1280 MB, fails at 1152 MB).
+`postinstall` runs `prisma generate` into `src/generated/` (not committed). Everything the build
+needs is in `dependencies`, so installs that omit devDependencies (`NODE_ENV=production`) still
+build; `devDependencies` holds only Playwright for the e2e script. `prepare-db`, the Prisma CLI
+and `db:import` read `.env` files through `@next/env`, exactly like the server.
 
 ## Storage modes
 
@@ -18,7 +45,7 @@ Next.js App Router + Prisma/MySQL. Types and constants live in `src/server/contr
 
 | `DATABASE_URL` | Mode | Implementation |
 |---|---|---|
-| set | `database` | `PrismaStore` — Prisma 7 + `@prisma/adapter-mariadb` (pure JS driver; works with MySQL 5.7+/8 and MariaDB 10.x). Schema created with `npm run db:push`. On first use with an empty DB it seeds from the seed content. |
+| set | `database` | `PrismaStore` — Prisma 7 + `@prisma/adapter-mariadb` (pure JS driver; works with MySQL 5.7+/8 and MariaDB 10.x). Tables are created by the build (or `npm run db:push`). On first use with an empty DB it seeds from the seed content. |
 | unset | `demo` | `MemoryStore` — in-process copy of the seed content on `globalThis`. Writes work until the process restarts. The admin panel shows a "Demo Mode" badge. |
 
 Seed content = `INITIAL_CMS_STATE` (src/data/seedData.ts) merged with the non-personal content of the
@@ -67,8 +94,9 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
   username, not on the denylist (legacy defaults and common passwords).
 - `src/proxy.ts` (Next.js 16 replacement for `middleware.ts`) rejects requests to `/api/admin/*`
   without a valid staff session (401). Route handlers re-check the session and RBAC themselves.
-- Google sign-in no longer creates accounts or sessions (the client cannot prove the Google
-  identity to the server without Firebase Admin). The button reports that it is unavailable.
+- Google sign-in is not offered: the server has no way to verify a Google identity. The button on
+  the login page and the "Connect Google Calendar" button report that the service is unavailable
+  (the calendar offers an .ICS export instead).
 - Career candidates: separate cookie `mmm_candidate` (`CandidateSession`), bcrypt passwords.
 - CSRF: SameSite=Lax cookies + `assertSameOrigin` on every state-changing route.
 
@@ -111,8 +139,11 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
 | GET `/api/public/virtual-office/status` | none | Sanitised status. |
 | POST `/api/public/virtual-office/checkin` | none, rate-limited | Lead-capture gate; creates session + lead server-side. |
 | GET `/api/admin/virtual-office` | staff + RBAC | Full config incl. room links + sessions. |
+| GET `/api/health` | none | `{ok, mode, db: 'up' \| 'down'}`; 503 when the store does not answer. For uptime monitors. |
+| any other `/api/*` | none | 404 JSON (`NOT_FOUND`). |
 
-The legacy `/api/cms-state` endpoints are removed.
+Static files: `/assets/*` is cached for a day (`stale-while-revalidate` a week), `/_next/static/*` is
+immutable, and a missing file is a 404, not the application shell.
 
 ## Client store changes (`src/store/useCMSStore.tsx`)
 
@@ -163,7 +194,8 @@ public content the process embedded (or the browser's cached copy / built-in con
 ## Environment variables
 
 `DATABASE_URL`, `JWT_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-4-hydrogen`),
-`NEXT_PUBLIC_APP_URL`, `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (first sign-in),
+`NEXT_PUBLIC_APP_URL` (when unset, metadata URLs use the request host), `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (first sign-in),
 `TRUSTED_PROXY_HOPS` (optional, default 1), `DEMO_MODE=1` (demo admin in production),
 `CHAT_DAILY_LIMIT` (optional, default 3000), `MAX_STORED_UPLOAD_MB` (optional, default 160),
-`NEXT_OUTPUT=standalone` (Docker only).
+`SKIP_DB_PUSH=1` (build without touching the database), `NEXT_OUTPUT=standalone` (Docker only).
+See `.env.example`.
