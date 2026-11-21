@@ -979,6 +979,41 @@ async function main() {
       assert(now.find((u) => u.id === record.id).fullName === record.fullName, 'teacher not restored');
     });
 
+    await scenario('two repeat submissions and a staff edit of the same lead at the same moment: nothing acknowledged is lost', async () => {
+      const api = await apiClient();
+      for (let round = 0; round < 2; round += 1) {
+        const phone = randomPhone();
+        const name = `E2E Race ${RUN_ID} ${round}`;
+        const submit = (message) =>
+          api.post('/api/public/submit', {
+            data: { items: [{ key: 'leads', item: { id: 'client-id', name, phone, email: '', courseId: '', message, source: 'Quick Inquiry' } }] },
+          });
+        assert((await submit('first')).status() === 200, 'first submission failed');
+        const loaded = await (await admin.request.get(BASE + '/api/state')).json();
+        const stored = loaded.state.leads.find((l) => l.phone === phone);
+        assert(stored, 'lead not stored');
+        // All three were prepared from the same state of the lead and are sent together.
+        const [a, b, staff] = await Promise.all([
+          submit(`again A${round}`),
+          submit(`again B${round}`),
+          admin.request.post(BASE + '/api/admin/sync', {
+            data: { baseVersion: loaded.version, ops: [{ op: 'upsert', key: 'leads', item: { ...stored, status: 'Contacted' } }] },
+          }),
+        ]);
+        assert(a.status() === 200 && b.status() === 200, `repeat submissions returned ${a.status()} and ${b.status()}`);
+        assert(staff.status() === 200, `staff edit returned ${staff.status()}`);
+        const staffRefused = ((await staff.json()).rejected || []).some((r) => r.reason.startsWith('CONFLICT:'));
+        const after = (await (await admin.request.get(BASE + '/api/state')).json()).state.leads.filter((l) => l.phone === phone);
+        assert(after.length === 1, `${after.length} leads for one student`);
+        const notes = JSON.stringify(after[0].notes || []);
+        assert(notes.includes(`again A${round}`) && notes.includes(`again B${round}`), 'a repeat submission that was acknowledged is missing from the lead');
+        assert((after[0].notes || []).length === (stored.notes || []).length + 2, 'notes were lost or duplicated');
+        // The staff edit is either stored or was reported back as a conflict, never silently dropped.
+        assert((after[0].status === 'Contacted') !== staffRefused, `staff edit: status ${after[0].status}, refused ${staffRefused}`);
+      }
+      await api.dispose();
+    });
+
     // ------------------------------------------------------------------------------------
     // Navigation and metadata
     // ------------------------------------------------------------------------------------
