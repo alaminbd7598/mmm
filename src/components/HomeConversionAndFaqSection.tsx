@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowRight,
@@ -25,7 +25,13 @@ import {
   Zap,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { matchAdmissionTokenByContact } from '../utils/admissionToken2027Logic';
+import {
+  AdmissionTokenMatch,
+  MIN_TOKEN_MATCH_PHONE_DIGITS,
+  applyAdmissionToken,
+  countDigits,
+  matchAdmissionToken,
+} from '../lib/api/admission-token';
 import {
   filterHomeFaqByCategory,
   GENERAL_CLASS_OPTIONS,
@@ -36,6 +42,8 @@ import {
   validateQuickHomeRegistration,
 } from '../utils/homeConversionLogic';
 
+const TOKEN_MATCH_DEBOUNCE_MS = 400;
+
 interface HomeRegistrationSplitSectionProps {
   onOpenFullAdmission: () => void;
 }
@@ -43,7 +51,7 @@ interface HomeRegistrationSplitSectionProps {
 export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSectionProps> = ({
   onOpenFullAdmission,
 }) => {
-  const { language, submitInquiry, markAdmissionTokenApplied, state } = useCMS();
+  const { language, submitInquiry, state } = useCMS();
   const [studentName, setStudentName] = useState('');
   const [guardianName, setGuardianName] = useState('');
   const [mobile, setMobile] = useState('');
@@ -59,10 +67,38 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
   const [formError, setFormError] = useState('');
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
 
-  const matchedToken = matchAdmissionTokenByContact(state.admissionTokens2027, {
-    phone: mobile,
-    email: guardianEmail,
-  });
+  const [tokenMatch, setTokenMatch] = useState<AdmissionTokenMatch | null>(null);
+
+  // The guardian's own 2027 token is looked up on the server once the mobile number is complete.
+  useEffect(() => {
+    if (countDigits(mobile) < MIN_TOKEN_MATCH_PHONE_DIGITS) {
+      setTokenMatch(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void matchAdmissionToken(
+        { phone: mobile.trim(), email: guardianEmail.trim() || undefined },
+        controller.signal
+      ).then((res) => {
+        if (!controller.signal.aborted) setTokenMatch(res.ok ? res.data.match : null);
+      });
+    }, TOKEN_MATCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mobile, guardianEmail]);
+
+  const matchedToken = tokenMatch
+    ? {
+        id: tokenMatch.id,
+        tokenCode: tokenMatch.tokenCode,
+        studentName: tokenMatch.studentName,
+        classNameLabel: tokenMatch.classNameLabel,
+        ...tokenMatch.totals,
+      }
+    : null;
 
   const classOptions =
     department === 'General' ? GENERAL_CLASS_OPTIONS[language] : TAHFIZ_CLASS_OPTIONS[language];
@@ -241,7 +277,7 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
     });
 
     if (matchedToken) {
-      markAdmissionTokenApplied(matchedToken.id);
+      void applyAdmissionToken(matchedToken.id, mobile.trim());
     }
 
     const refId = matchedToken

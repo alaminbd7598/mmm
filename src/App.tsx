@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Home, Info, Mail, RefreshCw, X } from 'lucide-react';
 import { ThemeProvider } from './store/ThemeContext';
-import { CMSProvider, useCMS } from './store/useCMSStore';
+import { CMSProvider, PUBLIC_CACHE_STORAGE_KEY, useCMS } from './store/useCMSStore';
 import { PublicWebsite } from './components/PublicWebsite';
 import { AdminLogin } from './components/AdminLogin';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -43,6 +43,7 @@ class AppErrorBoundary extends React.Component<
 
   handleHardReset = () => {
     try {
+      localStorage.removeItem(PUBLIC_CACHE_STORAGE_KEY);
       localStorage.removeItem('maharat_model_madrasah_cms_v11');
       localStorage.removeItem('mmm_admission_discount_tokens_v1');
     } catch {
@@ -104,7 +105,8 @@ class AppErrorBoundary extends React.Component<
 }
 
 const MainShell: React.FC = () => {
-  const { currentUser, toasts, dismissToast } = useCMS();
+  const { currentUser, mustChangePassword, toasts, dismissToast } = useCMS();
+  const hasStaffSession = Boolean(currentUser) && !mustChangePassword;
   const [preferredAdminRole, setPreferredAdminRole] = useState<AdminRole | undefined>(undefined);
   const [currentView, setCurrentView] = useState<AppView>(() => {
     if (typeof window !== 'undefined') {
@@ -129,12 +131,19 @@ const MainShell: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // If user logs out while inside admin-dashboard, cleanly return to admin-login
+  // If user logs out (or must still change the password) while inside admin-dashboard, return to admin-login
   React.useEffect(() => {
-    if (currentView === 'admin-dashboard' && !currentUser) {
+    if (currentView === 'admin-dashboard' && !hasStaffSession) {
       setCurrentView('admin-login');
     }
-  }, [currentView, currentUser]);
+  }, [currentView, hasStaffSession]);
+
+  // A staff session restored on reload (or completed on the login screen) opens the dashboard.
+  React.useEffect(() => {
+    if (currentView === 'admin-login' && hasStaffSession) {
+      setCurrentView('admin-dashboard');
+    }
+  }, [currentView, hasStaffSession]);
 
   const handleOpenAdmin = (role?: AdminRole) => {
     if (role) {
@@ -143,7 +152,7 @@ const MainShell: React.FC = () => {
     if (typeof window !== 'undefined' && window.location.pathname !== '/admin') {
       window.history.pushState(null, '', '/admin');
     }
-    if (currentUser) {
+    if (hasStaffSession) {
       setCurrentView('admin-dashboard');
     } else {
       setCurrentView('admin-login');
@@ -219,7 +228,7 @@ const MainShell: React.FC = () => {
           />
         )}
 
-        {currentView === 'admin-dashboard' && currentUser && (
+        {currentView === 'admin-dashboard' && hasStaffSession && (
           <AdminDashboard onSwitchToWebsite={handleBackToWebsite} />
         )}
       </AppErrorBoundary>

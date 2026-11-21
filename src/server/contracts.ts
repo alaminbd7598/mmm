@@ -246,6 +246,19 @@ export interface StateSnapshot {
   state: CMSState;
 }
 
+export interface ApplyOpsOptions {
+  /** bcrypt hashes for `users` items, keyed by item id. */
+  passwordHashes?: Record<string, string>;
+  /** bcrypt hashes for `careerCandidates` items, keyed by item id. */
+  candidatePasswordHashes?: Record<string, string>;
+  /**
+   * Per user id: value to store in `mustChangePassword` when that user is written.
+   * Users not listed keep their current flag (new users start with `false`). Admin-set passwords
+   * (new accounts and resets through sync) pass `true` so the user must pick their own.
+   */
+  mustChangePassword?: Record<string, boolean>;
+}
+
 export interface DataStore {
   readonly mode: StorageMode;
   /** Ensure schema/seed exist (idempotent). Called lazily before the first read. */
@@ -259,10 +272,7 @@ export interface DataStore {
    * (use the auth module) and passed via `passwordHashes` keyed by item id; the store strips any
    * `password`/`passwordHash` keys from the stored JSON documents.
    */
-  applyOps(
-    ops: SyncOp[],
-    opts?: { passwordHashes?: Record<string, string>; candidatePasswordHashes?: Record<string, string> }
-  ): Promise<{ version: number; updatedAt: string }>;
+  applyOps(ops: SyncOp[], opts?: ApplyOpsOptions): Promise<{ version: number; updatedAt: string }>;
   getUserAuthByUsername(username: string): Promise<StoredUserAuth | null>;
   getUserAuthById(id: string): Promise<StoredUserAuth | null>;
   setUserPassword(id: string, passwordHash: string, mustChangePassword: boolean): Promise<void>;

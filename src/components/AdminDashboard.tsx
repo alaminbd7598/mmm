@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   Bot,
   Briefcase,
@@ -18,6 +19,7 @@ import {
   Gift,
   GitBranch,
   Globe,
+  KeyRound,
   GraduationCap,
   Image,
   LayoutDashboard,
@@ -93,6 +95,7 @@ import { AdminCalendarTab } from './AdminCalendarTab';
 import { AdminBlogTab } from './AdminBlogTab';
 import { AdminAIPublisherTab } from './AdminAIPublisherTab';
 import { AdminProfileModal } from './AdminProfileModal';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { ReleaseNotesModal } from './ReleaseNotesAndCertModals';
 import { resolveVersionManagerConfig, shouldShowAdminVersion } from '../utils/versionLogic';
 import {
@@ -123,6 +126,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     logout,
     pushToast,
     liveSyncStatus,
+    storageMode,
     syncLocalToLiveServer,
     pullFromLiveServer,
     enableAllWebsiteSections,
@@ -156,6 +160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
 
   const [isLiveAccessModalOpen, setIsLiveAccessModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isReleaseNotesOpen, setIsReleaseNotesOpen] = useState(false);
 
   const versionManagerConfig = resolveVersionManagerConfig(state.versionManager);
@@ -1042,6 +1047,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {storageMode === 'demo' && (
+              <span
+                data-testid="admin-demo-mode-badge"
+                title={tr(
+                  'ডেমো মোড: কোনো ডাটাবেস সংযুক্ত নেই, তাই পরিবর্তনগুলো সার্ভার রিস্টার্ট হলে মুছে যাবে। স্থায়ীভাবে সংরক্ষণের জন্য DATABASE_URL সেট করুন।',
+                  'Demo Mode: no database is connected, so changes are lost when the server restarts. Set DATABASE_URL to persist data.',
+                  'الوضع التجريبي: لا توجد قاعدة بيانات متصلة، لذا تُفقد التغييرات عند إعادة تشغيل الخادم. اضبط DATABASE_URL لحفظ البيانات.'
+                )}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wide shrink-0 cursor-help"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">{tr('ডেমো মোড', 'Demo Mode', 'وضع تجريبي')}</span>
+              </span>
+            )}
             <AccessibilityToolbar compact={true} />
 
             {/* Staff Personal Profile & Digital Signature Vault Trigger */}
@@ -1064,6 +1083,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
               <span className="hidden lg:inline max-w-[130px] truncate">
                 {currentUser?.fullName || 'Super Admin'}
               </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="admin-change-password-btn"
+              onClick={() => setIsChangePasswordOpen(true)}
+              aria-label={tr('পাসওয়ার্ড পরিবর্তন করুন', 'Change Password', 'تغيير كلمة المرور')}
+              title={tr('পাসওয়ার্ড পরিবর্তন করুন', 'Change Password', 'تغيير كلمة المرور')}
+              className="inline-flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#005a6e] dark:text-[#f0c95e] transition-colors cursor-pointer shrink-0"
+            >
+              <KeyRound className="w-4 h-4" />
             </button>
 
             <button
@@ -1143,8 +1173,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                     {tr(
-                      'পূর্বে পরিবর্তনগুলো শুধুমাত্র ব্রাউজারের LocalStorage-এ থাকতো। এখন "/api/cms-state" সার্ভার স্টোরেজের মাধ্যমে আপনার লোকাল ব্রাউজারের সকল তথ্য স্বয়ংক্রিয়ভাবে লাইভ সার্ভারে সেভ হচ্ছে—ফলে যে কোনো ডিভাইস বা ব্রাউজার থেকে লিংকে ঢুকলে সবাই একই আপডেটেড তথ্য দেখতে পাবেন।',
-                      'Previously, edits stayed only in browser LocalStorage. Now "/api/cms-state" persists all changes on the live server automatically so any visitor on any device sees the exact same updated information.',
+                      'পূর্বে পরিবর্তনগুলো শুধুমাত্র ব্রাউজারের LocalStorage-এ থাকতো। এখন প্রতিটি পরিবর্তন আপনার অনুমতি যাচাই করে সরাসরি সার্ভারের ডাটাবেজে সেভ হচ্ছে—ফলে যে কোনো ডিভাইস বা ব্রাউজার থেকে লিংকে ঢুকলে সবাই একই আপডেটেড তথ্য দেখতে পাবেন।',
+                      'Previously, edits stayed only in browser LocalStorage. Now every change is checked against your permissions and saved in the server database automatically, so any visitor on any device sees the exact same updated information.',
                       'يتم الآن حفظ جميع التغييرات تلقائياً على الخادم المباشر ليتمكن أي زائر من أي جهاز من رؤية نفس البيانات المحدثة.'
                     )}
                   </p>
@@ -5259,6 +5289,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
       <AdminProfileModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+      />
+
+      <ChangePasswordDialog
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+        onChanged={() => setIsChangePasswordOpen(false)}
       />
 
       {/* Full Changelog & Release Notes Modal */}

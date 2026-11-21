@@ -2495,7 +2495,7 @@ export function enableAllPublicSections(settings: SiteSettings): SiteSettings {
 }
 
 /**
- * Deeply merges a partial or full CMSState (from localStorage, live server /api/cms-state, or JSON backup)
+ * Deeply merges a partial or full CMSState (from the public cache, GET /api/state, or a JSON backup)
  * with fallbackState so all 5 roles, RBAC permissions, stored logos, and infographics are preserved.
  */
 export function mergeLiveCMSState(

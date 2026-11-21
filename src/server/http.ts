@@ -1,5 +1,6 @@
 import 'server-only';
 import { NextResponse } from 'next/server';
+import { StoreConflictError, StoreNotFoundError, StoreUnavailableError } from './db/errors';
 
 /** JSON response helper with no-store caching (API data is per-request and may be personal). */
 export function json<T>(body: T, init?: number | ResponseInit): NextResponse {
@@ -57,6 +58,12 @@ export async function readJson<T = unknown>(req: Request, maxBytes: number): Pro
 /** Convert thrown errors into JSON responses without leaking internals. */
 export function handleError(err: unknown): NextResponse {
   if (err instanceof HttpError) return jsonError(err.status, err.message, err.code);
+  if (err instanceof StoreConflictError) return jsonError(409, err.message || 'Conflicting change.', err.code);
+  if (err instanceof StoreNotFoundError) return jsonError(404, err.message || 'Not found.', err.code);
+  if (err instanceof StoreUnavailableError) {
+    console.error('[api] data store unavailable:', err.message);
+    return jsonError(503, 'The database is temporarily unavailable.', err.code);
+  }
   console.error('[api]', err);
   return jsonError(500, 'Internal server error.', 'INTERNAL');
 }

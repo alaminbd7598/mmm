@@ -20,7 +20,7 @@ import { AccessibilityToolbar } from './AccessibilityToolbar';
 import { localizeDynamicText } from '../utils/textLocalizer';
 import { AdminRole } from '../types/cms';
 import { isValidExternalPortalUrl, resolveExternalPortals } from '../utils/portalAndHifzLogic';
-import { signInWithGoogleWorkspace } from '../lib/googleWorkspaceAuth';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 
 interface AdminLoginProps {
   initialRole?: AdminRole;
@@ -30,8 +30,9 @@ interface AdminLoginProps {
 
 interface RoleChoice {
   role: AdminRole;
-  defaultUser: string;
-  defaultPass: string;
+  /** Seed account of the in-memory demo server; shown only in Demo Mode. */
+  demoUser: string;
+  demoPass: string;
   icon: React.ElementType;
   shortBn: string;
   shortEn: string;
@@ -41,8 +42,8 @@ interface RoleChoice {
 const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Super Admin',
-    defaultUser: 'admin',
-    defaultPass: 'admin123',
+    demoUser: 'admin',
+    demoPass: 'admin123',
     icon: ShieldCheck,
     shortBn: 'সুপার অ্যাডমিন',
     shortEn: 'Super Admin',
@@ -50,8 +51,8 @@ const ROLE_CHOICES: RoleChoice[] = [
   },
   {
     role: 'Chairman / Managing Director',
-    defaultUser: 'chairman',
-    defaultPass: 'chairman123',
+    demoUser: 'chairman',
+    demoPass: 'chairman123',
     icon: Award,
     shortBn: 'চেয়ারম্যান',
     shortEn: 'Chairman',
@@ -59,8 +60,8 @@ const ROLE_CHOICES: RoleChoice[] = [
   },
   {
     role: 'Principal / Vice Principal',
-    defaultUser: 'principal',
-    defaultPass: 'principal123',
+    demoUser: 'principal',
+    demoPass: 'principal123',
     icon: GraduationCap,
     shortBn: 'অধ্যক্ষ',
     shortEn: 'Principal',
@@ -68,8 +69,8 @@ const ROLE_CHOICES: RoleChoice[] = [
   },
   {
     role: 'Coordinators / Teachers',
-    defaultUser: 'teacher',
-    defaultPass: 'teacher123',
+    demoUser: 'teacher',
+    demoPass: 'teacher123',
     icon: BookOpen,
     shortBn: 'শিক্ষক',
     shortEn: 'Teacher',
@@ -77,8 +78,8 @@ const ROLE_CHOICES: RoleChoice[] = [
   },
   {
     role: 'Content Managers',
-    defaultUser: 'manager',
-    defaultPass: 'manager123',
+    demoUser: 'manager',
+    demoPass: 'manager123',
     icon: Users,
     shortBn: 'ম্যানেজার',
     shortEn: 'Manager',
@@ -91,26 +92,32 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   onLoginSuccess,
   onBackToWebsite,
 }) => {
-  const { state, login, loginWithGoogleProfile, language } = useCMS();
+  const {
+    state,
+    login,
+    logout,
+    loginWithGoogleProfile,
+    language,
+    storageMode,
+    currentUser,
+    mustChangePassword,
+  } = useCMS();
+  const isDemoMode = storageMode === 'demo';
   const initialChoice =
     ROLE_CHOICES.find((r) => r.role === initialRole) || ROLE_CHOICES[0];
 
   const [selectedRole, setSelectedRole] = useState<AdminRole>(initialChoice.role);
-  const [username, setUsername] = useState(initialChoice.defaultUser);
-  const [password, setPassword] = useState(initialChoice.defaultPass);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (initialRole) {
       const found = ROLE_CHOICES.find((r) => r.role === initialRole);
-      if (found) {
-        setSelectedRole(found.role);
-        setUsername(found.defaultUser);
-        setPassword(found.defaultPass);
-      }
+      if (found) setSelectedRole(found.role);
     }
   }, [initialRole]);
 
@@ -123,16 +130,22 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
   const handleSelectRole = (choice: RoleChoice) => {
     setSelectedRole(choice.role);
-    setUsername(choice.defaultUser);
-    setPassword(choice.defaultPass);
     setError('');
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleFillDemoCredentials = (choice: RoleChoice) => {
+    setSelectedRole(choice.role);
+    setUsername(choice.demoUser);
+    setPassword(choice.demoPass);
+    setError('');
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const cleanUser = username.trim();
-    const cleanPass = password.trim();
-    if (cleanUser.length < 3 || cleanPass.length < 4) {
+    const cleanPass = password;
+    if (cleanUser.length < 3 || cleanPass.trim().length < 4) {
       setError(
         tr(
           'অনুগ্রহ করে সঠিক ইউজার আইডি ও পাসওয়ার্ড প্রদান করুন।',
@@ -142,7 +155,9 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
       );
       return;
     }
-    const res = login(cleanUser, cleanPass, selectedRole);
+    setIsSubmitting(true);
+    const res = await login(cleanUser, cleanPass, selectedRole);
+    setIsSubmitting(false);
     if (!res.success) {
       setError(
         res.error ||
@@ -155,33 +170,15 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
       return;
     }
     setError('');
-    onLoginSuccess();
+    setPassword('');
+    // With a pending password change the forced dialog below takes over instead.
+    if (!res.mustChangePassword) onLoginSuccess();
   };
 
-  const handleGoogleSignIn = async () => {
-    setError('');
-    setIsGoogleLoading(true);
-    try {
-      const session = await signInWithGoogleWorkspace();
-      loginWithGoogleProfile({
-        displayName: session.user.displayName,
-        email: session.user.email,
-        photoURL: session.user.photoURL,
-      });
-      onLoginSuccess();
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : tr(
-              'Google সাইন-ইন সম্পন্ন করা যায়নি। অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
-              'Google Sign-In could not be completed. Please try again.',
-              'تعذر تسجيل الدخول عبر Google.'
-            )
-      );
-    } finally {
-      setIsGoogleLoading(false);
-    }
+  // Google identities cannot be verified server-side, so this only reports the alternative.
+  const handleGoogleSignIn = () => {
+    const res = loginWithGoogleProfile({ email: '', displayName: '' });
+    setError(res.error || '');
   };
 
   const instName =
@@ -262,7 +259,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                   <button
                     key={choice.role}
                     type="button"
-                    data-testid={`login-role-${choice.defaultUser}`}
+                    data-testid={`login-role-${choice.demoUser}`}
                     onClick={() => handleSelectRole(choice)}
                     className="group flex flex-col items-center gap-1.5 text-center cursor-pointer"
                   >
@@ -368,9 +365,15 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               <button
                 type="submit"
                 data-testid="login-submit-button"
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0a1738] via-[#192f64] to-[#005a6e] py-3 text-sm font-extrabold text-white shadow-lg transition hover:opacity-95 active:scale-[0.99] cursor-pointer"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0a1738] via-[#192f64] to-[#005a6e] py-3 text-sm font-extrabold text-white shadow-lg transition hover:opacity-95 active:scale-[0.99] disabled:opacity-60 cursor-pointer"
               >
-                <Lock className="h-4 w-4 text-[#f0c95e]" />
+                {isSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-[#f0c95e]" />
+                ) : (
+                  <Lock className="h-4 w-4 text-[#f0c95e]" />
+                )}
                 {tr('ড্যাশবোর্ডে লগইন করুন', 'Sign In to Dashboard', 'تسجيل الدخول')}
               </button>
             </form>
@@ -388,32 +391,27 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
             <button
               type="button"
               onClick={handleGoogleSignIn}
-              disabled={isGoogleLoading}
               data-testid="google-signin-button"
               className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-4 text-sm font-semibold text-slate-800 dark:text-slate-100 shadow-xs transition hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-60 cursor-pointer"
             >
-              {isGoogleLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-[#005a6e]" />
-              ) : (
-                <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  />
-                </svg>
-              )}
+              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="#4285F4"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                />
+              </svg>
               <span>
                 {tr('Google অ্যাকাউন্ট দিয়ে সাইন ইন করুন', 'Sign in with Google', 'تسجيل الدخول باستخدام Google')}
               </span>
@@ -474,17 +472,31 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               </p>
             </div>
 
-            {/* Quick Credential Reference Card */}
+            {/* Role Quick-Select Card (demo credentials only when the server runs in Demo Mode) */}
             <div className="relative z-10 mt-8 rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur-sm space-y-2.5">
               <div className="text-[11px] font-bold uppercase tracking-wider text-[#f0c95e]">
-                {tr('রোল-ভিত্তিক কুইক অ্যাক্সেস', 'Role Quick-Fill Access', 'تعبئة سريعة للأدوار')}
+                {isDemoMode
+                  ? tr('ডেমো মোড · পরীক্ষামূলক লগইন', 'Demo Mode · Sample Sign-In', 'الوضع التجريبي · دخول تجريبي')
+                  : tr('রোল-ভিত্তিক কুইক অ্যাক্সেস', 'Role Quick Select', 'اختيار سريع للأدوار')}
               </div>
+              {isDemoMode && (
+                <p
+                  data-testid="login-demo-mode-notice"
+                  className="rounded-lg border border-amber-300/40 bg-amber-400/15 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-100"
+                >
+                  {tr(
+                    'ডাটাবেস সংযুক্ত নয় (DATABASE_URL নেই)। পরিবর্তনগুলো সার্ভার রিস্টার্ট হলে মুছে যাবে। নিচের নমুনা অ্যাকাউন্টে ক্লিক করে লগইন তথ্য পূরণ করুন।',
+                    'No database is connected (DATABASE_URL is not set). Changes are lost when the server restarts. Click a sample account below to fill in its credentials.',
+                    'لا توجد قاعدة بيانات متصلة (DATABASE_URL غير مضبوط). تُفقد التغييرات عند إعادة تشغيل الخادم. انقر على حساب تجريبي لتعبئة بيانات الدخول.'
+                  )}
+                </p>
+              )}
               <div className="grid grid-cols-1 gap-1.5 text-[11px]">
                 {ROLE_CHOICES.map((c) => (
                   <button
                     key={c.role}
                     type="button"
-                    onClick={() => handleSelectRole(c)}
+                    onClick={() => (isDemoMode ? handleFillDemoCredentials(c) : handleSelectRole(c))}
                     className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left transition cursor-pointer ${
                       selectedRole === c.role
                         ? 'bg-[#f0c95e] text-[#0a1738] font-extrabold'
@@ -492,9 +504,11 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                     }`}
                   >
                     <span>{tr(c.shortBn, c.shortEn, c.shortAr)}</span>
-                    <span className="font-mono text-[10px]">
-                      {c.defaultUser} / {c.defaultPass}
-                    </span>
+                    {isDemoMode && (
+                      <span className="font-mono text-[10px]">
+                        {c.demoUser} / {c.demoPass}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -506,6 +520,16 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
           </div>
         </div>
       </main>
+
+      <ChangePasswordDialog
+        isOpen={Boolean(currentUser && mustChangePassword)}
+        forced
+        onClose={() => undefined}
+        onChanged={onLoginSuccess}
+        onSignOut={() => {
+          void logout();
+        }}
+      />
     </div>
   );
 };

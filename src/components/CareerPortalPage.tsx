@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
   Award,
@@ -29,25 +29,34 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { CareerCandidateAccount, CareerJobCircular } from '../types/cms';
+import { CareerApplicationItem, CareerJobCircular } from '../types/cms';
+import {
+  ApplicationStatusEntry,
+  CandidateProfile,
+  fetchCandidateMe,
+  loginCandidate,
+  logoutCandidate,
+  lookupApplicationStatus,
+  registerCandidate,
+} from '../lib/api/career';
 import {
   validateCandidateRegistration,
   validateCareerApplication,
 } from '../utils/careerAndMapsLogic';
-import { findCareerApplicationsByContact } from '../utils/admissionToken2027Logic';
+import { MIN_PASSWORD_LENGTH } from '../server/contracts';
 
 interface CareerPortalPageProps {
   onNavigateContact: () => void;
 }
 
 export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateContact }) => {
-  const { state, language, submitCareerApplication, registerCareerCandidate } = useCMS();
+  const { state, language, submitCareerApplication } = useCMS();
   const activeJobs = (state.careerJobs || []).filter((j) => j.active);
-  const allApplications = state.careerApplications || [];
-  const allCandidates = state.careerCandidates || [];
 
-  // Optional Candidate Account session (guest apply works without login)
-  const [signedInCandidate, setSignedInCandidate] = useState<CareerCandidateAccount | null>(null);
+  // Optional Candidate Account session (server cookie; guest apply works without login)
+  const [signedInCandidate, setSignedInCandidate] = useState<CandidateProfile | null>(null);
+  const [candidateApplications, setCandidateApplications] = useState<CareerApplicationItem[]>([]);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | null>(null);
   const [authName, setAuthName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
@@ -58,13 +67,37 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
   // No-Login Application Status Tracker
   const [statusQuery, setStatusQuery] = useState('');
   const [statusSearched, setStatusSearched] = useState(false);
+  const [trackedApplications, setTrackedApplications] = useState<ApplicationStatusEntry[]>([]);
+  const [statusLookupFailed, setStatusLookupFailed] = useState<'rate-limited' | 'error' | null>(null);
+  const [isStatusSearching, setIsStatusSearching] = useState(false);
 
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
 
-  const trackedApplications = statusSearched
-    ? findCareerApplicationsByContact(allApplications, statusQuery)
-    : [];
+  // Restore an existing candidate session and load the candidate's own applications.
+  useEffect(() => {
+    let active = true;
+    void fetchCandidateMe().then((res) => {
+      if (!active || !res.ok) return;
+      setSignedInCandidate(res.data.candidate);
+      setCandidateApplications(res.data.applications);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Applications are private data, so the lookup runs on the server and returns status fields only.
+  const searchApplicationStatus = async () => {
+    const query = statusQuery.trim();
+    if (!query || isStatusSearching) return;
+    setIsStatusSearching(true);
+    const res = await lookupApplicationStatus(query);
+    setIsStatusSearching(false);
+    setTrackedApplications(res.ok ? res.data.applications : []);
+    setStatusLookupFailed(res.ok ? null : res.code === 'RATE_LIMITED' ? 'rate-limited' : 'error');
+    setStatusSearched(true);
+  };
 
   // Job Details & Application Modals
   const [viewingJob, setViewingJob] = useState<CareerJobCircular | null>(null);
@@ -173,54 +206,101 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
 
     setAppError('');
     setAppSuccessId(created.id);
+    if (signedInCandidate) {
+      setCandidateApplications((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+    }
   };
 
-  const handleCandidateAuthSubmit = (e: React.FormEvent) => {
+  const candidateAuthErrorMessage = (code: string, status: number): string => {
+    switch (code) {
+      case 'INVALID_CREDENTIALS':
+        return 'ইমেইল বা পাসওয়ার্ড সঠিক নয়। নতুন হলে রেজিস্ট্রেশন করুন অথবা সরাসরি গেস্ট হিসেবে আবেদন করুন।';
+      case 'EMAIL_TAKEN':
+      case 'CONFLICT':
+        return 'এই ইমেইল দিয়ে ইতিপূর্বেই অ্যাকাউন্ট তৈরি করা হয়েছে। অনুগ্রহ করে লগইন করুন।';
+      case 'TOO_SHORT':
+        return `পাসওয়ার্ড কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষরের হতে হবে।`;
+      case 'NEEDS_LETTER_AND_DIGIT':
+        return 'পাসওয়ার্ডে অক্ষর ও সংখ্যা উভয়ই থাকতে হবে।';
+      case 'TOO_COMMON':
+      case 'SAME_AS_USERNAME':
+        return 'এই পাসওয়ার্ডটি সহজে অনুমানযোগ্য; অনুগ্রহ করে অন্য পাসওয়ার্ড দিন।';
+      case 'RATE_LIMITED':
+        return 'অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।';
+      case 'BAD_REQUEST':
+        return 'অনুগ্রহ করে সকল তথ্য সঠিকভাবে পূরণ করুন।';
+      default:
+        return status === 0
+          ? 'সার্ভারের সাথে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ যাচাই করে আবার চেষ্টা করুন।'
+          : 'অনুরোধটি সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।';
+    }
+  };
+
+  const loadCandidateApplications = async () => {
+    const me = await fetchCandidateMe();
+    if (me.ok) setCandidateApplications(me.data.applications);
+  };
+
+  const handleCandidateAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthSubmitting) return;
     setAuthError('');
     if (authModalMode === 'register') {
+      // Duplicate emails are detected by the server; accounts are never sent to browsers.
       const check = validateCandidateRegistration(
         { fullName: authName, email: authEmail, phone: authPhone, password: authPassword },
-        allCandidates
+        []
       );
       if (!check.valid) {
         setAuthError(check.error || 'সঠিক তথ্য দিন।');
         return;
       }
-      const res = registerCareerCandidate({
-        fullName: authName.trim(),
-        email: authEmail.trim(),
-        phone: authPhone.trim(),
-        password: authPassword.trim(),
-      });
-      if (!res.success || !res.candidate) {
-        setAuthError(res.error || 'রেজিস্ট্রেশন সম্পন্ন হয়নি।');
+      if (authPassword.length < MIN_PASSWORD_LENGTH) {
+        setAuthError(candidateAuthErrorMessage('TOO_SHORT', 400));
         return;
       }
-      setSignedInCandidate(res.candidate);
+      setIsAuthSubmitting(true);
+      const res = await registerCandidate({
+        fullName: authName.trim(),
+        email: authEmail.trim().toLowerCase(),
+        phone: authPhone.trim(),
+        password: authPassword,
+      });
+      setIsAuthSubmitting(false);
+      if (!res.ok) {
+        setAuthError(candidateAuthErrorMessage(res.code, res.status));
+        return;
+      }
+      setSignedInCandidate(res.data.candidate);
+      setCandidateApplications([]);
+      setAuthPassword('');
       setAuthModalMode(null);
     } else if (authModalMode === 'login') {
-      const matched = allCandidates.find(
-        (c) =>
-          c.email.toLowerCase() === authEmail.trim().toLowerCase() &&
-          c.password === authPassword.trim()
-      );
-      if (!matched) {
-        setAuthError('ইমেইল বা পাসওয়ার্ড সঠিক নয়। নতুন হলে রেজিস্ট্রেশন করুন অথবা সরাসরি গেস্ট হিসেবে আবেদন করুন।');
+      if (!authEmail.trim() || !authPassword) {
+        setAuthError(candidateAuthErrorMessage('BAD_REQUEST', 400));
         return;
       }
-      setSignedInCandidate(matched);
+      setIsAuthSubmitting(true);
+      const res = await loginCandidate({ email: authEmail.trim().toLowerCase(), password: authPassword });
+      setIsAuthSubmitting(false);
+      if (!res.ok) {
+        setAuthError(candidateAuthErrorMessage(res.code, res.status));
+        return;
+      }
+      setSignedInCandidate(res.data.candidate);
+      setAuthPassword('');
       setAuthModalMode(null);
+      await loadCandidateApplications();
     }
   };
 
-  const myApplications = signedInCandidate
-    ? allApplications.filter(
-        (a) =>
-          a.applicantAccountEmail?.toLowerCase() === signedInCandidate.email.toLowerCase() ||
-          a.email.toLowerCase() === signedInCandidate.email.toLowerCase()
-      )
-    : [];
+  const handleCandidateSignOut = async () => {
+    await logoutCandidate();
+    setSignedInCandidate(null);
+    setCandidateApplications([]);
+  };
+
+  const myApplications = signedInCandidate ? candidateApplications : [];
 
   const benefits = [
     {
@@ -337,7 +417,7 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                setStatusSearched(true);
+                void searchApplicationStatus();
               }}
               className="flex flex-col sm:flex-row gap-2.5 w-full md:w-auto md:min-w-[420px]"
             >
@@ -399,7 +479,6 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
                       </div>
                       <div className="flex flex-wrap gap-3 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                         <span>ID: {app.id}</span>
-                        {app.paymentTrxId && <span>TrxID: {app.paymentTrxId}</span>}
                         <span>{app.submittedAt}</span>
                       </div>
                       {app.hrNote && (
@@ -449,7 +528,9 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
               </div>
               <button
                 type="button"
-                onClick={() => setSignedInCandidate(null)}
+                onClick={() => {
+                  void handleCandidateSignOut();
+                }}
                 className="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
@@ -1171,7 +1252,8 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
               )}
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2e0249] to-fuchsia-700 text-white font-extrabold text-sm cursor-pointer"
+                disabled={isAuthSubmitting}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2e0249] to-fuchsia-700 text-white font-extrabold text-sm disabled:opacity-60 cursor-pointer"
               >
                 {authModalMode === 'register' ? 'অ্যাকাউন্ট তৈরি করুন' : 'লগইন করুন'}
               </button>

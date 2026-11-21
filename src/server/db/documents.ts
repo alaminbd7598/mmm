@@ -18,17 +18,7 @@ const SECRET_FIELDS = ['password', 'passwordHash'] as const;
  * Options accepted by both stores' applyOps. A superset of the DataStore contract:
  * `mustChangePassword` lets the importer/seeder flag users in the same transaction.
  */
-export interface ApplyOpsOptions {
-  /** bcrypt hashes for `users` items, keyed by item id. */
-  passwordHashes?: Record<string, string>;
-  /** bcrypt hashes for `careerCandidates` items, keyed by item id. */
-  candidatePasswordHashes?: Record<string, string>;
-  /**
-   * Per user id: value to store in `mustChangePassword` when that user is written.
-   * Users not listed keep their current flag (new users start with `false`).
-   */
-  mustChangePassword?: Record<string, boolean>;
-}
+export type { ApplyOpsOptions } from '../contracts';
 
 /** Deep copy of a JSON-compatible value (documents are always JSON). */
 export function cloneJson<T>(value: T): T {
