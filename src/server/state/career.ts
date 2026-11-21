@@ -61,14 +61,18 @@ export function newCandidateOps(input: NewCandidateInput, id: string, now: Date)
   };
 }
 
-/** What the no-login status tracker may show: no contact details, CV, payment or salary data. */
+/**
+ * What the no-login status tracker may show: first name, position, status and date. No contact
+ * details, CV, payment or salary data, and not the HR note: the lookup only needs a phone number
+ * or email address, which other people know, and the note is a message to the applicant
+ * (interview times, decisions). Applicants read it in their signed-in list instead.
+ */
 export interface PublicApplicationStatus {
   id: string;
   applicantName: string;
   jobTitleBn: string;
   status: CareerApplicationItem['status'];
   submittedAt: string;
-  hrNote?: string;
 }
 
 /** Maximum applications returned by one status lookup. */
@@ -81,7 +85,6 @@ export function toPublicApplicationStatus(app: CareerApplicationItem): PublicApp
     jobTitleBn: app.jobTitleBn,
     status: app.status,
     submittedAt: app.submittedAt,
-    ...(app.hrNote ? { hrNote: app.hrNote } : {}),
   };
 }
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CMSState, CareerApplicationItem } from '../../types/cms';
-import { MAX_STATUS_RESULTS, lookupApplicationStatus } from './career';
+import { MAX_STATUS_RESULTS, applicationsForCandidate, lookupApplicationStatus } from './career';
 
 const application = (overrides: Partial<CareerApplicationItem> = {}): CareerApplicationItem => ({
   id: 'app-1',
@@ -42,10 +42,21 @@ test('status lookup returns status fields only, with the first name', () => {
     jobTitleBn: 'হিফজ শিক্ষক',
     status: 'Shortlisted',
     submittedAt: 'Nov 21, 2026, 10:32 AM',
-    hrNote: 'Interview on Saturday',
   });
-  const noNote = lookupApplicationStatus(stateWith([application({ hrNote: '' })]), 'app-1')[0];
-  assert.equal('hrNote' in noNote, false);
+});
+
+test('the HR note reaches the signed-in applicant only, never the no-login lookup', () => {
+  const guest = application();
+  const own = application({ id: 'app-2', isGuestApplication: false, applicantAccountEmail: 'rahman@example.test' });
+  const state = stateWith([guest, own]);
+  for (const query of ['01711223344', 'rahman@example.test', 'app-1', 'app-2']) {
+    for (const entry of lookupApplicationStatus(state, query)) {
+      assert.equal('hrNote' in entry, false, query);
+      assert.equal(JSON.stringify(entry).includes('Interview'), false, query);
+    }
+  }
+  const mine = applicationsForCandidate(state, 'Rahman@example.test');
+  assert.deepEqual(mine.map((a) => [a.id, a.hrNote]), [['app-2', 'Interview on Saturday']]);
 });
 
 test('status lookup caps the number of results', () => {

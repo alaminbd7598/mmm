@@ -503,12 +503,6 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
                         <span>ID: {app.id}</span>
                         <span>{app.submittedAt}</span>
                       </div>
-                      {app.hrNote && (
-                        <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 rounded-xl px-3 py-2">
-                          {tr('এইচআর বার্তা: ', 'HR Note: ', 'ملاحظة الإدارة: ')}
-                          {app.hrNote}
-                        </p>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -608,19 +602,31 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
               {myApplications.map((app) => (
                 <div
                   key={app.id}
-                  className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3"
+                  className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2"
                 >
-                  <div>
-                    <p className="font-bold text-sm text-slate-900 dark:text-white">
-                      {app.jobTitleBn}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      জমা: {app.submittedAt}
-                    </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-sm text-slate-900 dark:text-white">
+                        {app.jobTitleBn}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        জমা: {app.submittedAt}
+                      </p>
+                    </div>
+                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-amber-300 shrink-0">
+                      {app.status}
+                    </span>
                   </div>
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-amber-300 shrink-0">
-                    {app.status}
-                  </span>
+                  {/* The HR message is personal, so it is shown here (signed in), not in the no-login tracker. */}
+                  {app.hrNote && (
+                    <p
+                      data-testid="career-my-application-hr-note"
+                      className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 rounded-xl px-3 py-2"
+                    >
+                      {tr('এইচআর বার্তা: ', 'HR Note: ', 'ملاحظة الإدارة: ')}
+                      {app.hrNote}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

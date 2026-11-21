@@ -109,7 +109,6 @@ export interface ApplicationStatusEntry {
   jobTitleBn: string;
   status: CareerApplicationItem['status'];
   submittedAt: string;
-  hrNote?: string;
 }
 
 const statusEntrySchema = z.object({
@@ -118,7 +117,6 @@ const statusEntrySchema = z.object({
   jobTitleBn: z.string().catch(''),
   status: z.string(),
   submittedAt: z.string().catch(''),
-  hrNote: z.string().optional(),
 });
 const statusSchema = z.object({ applications: z.array(statusEntrySchema).default([]) });
 

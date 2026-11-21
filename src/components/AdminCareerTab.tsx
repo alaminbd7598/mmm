@@ -428,7 +428,7 @@ export const AdminCareerTab: React.FC = () => {
                     </p>
                   )}
 
-                  {/* Inline HR Note Editor (visible in Public No-Login Tracker) */}
+                  {/* Inline HR note editor. The applicant reads the note in their signed-in application list; the no-login tracker never shows it. */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
                     <input
                       type="text"
