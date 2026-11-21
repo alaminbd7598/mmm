@@ -125,8 +125,23 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
       return;
     }
     setIsSaving(true);
-    const res = await changePassword(currentPassword, newPassword);
-    setIsSaving(false);
+    let res: Awaited<ReturnType<typeof changePassword>>;
+    try {
+      // The store action also reloads the state after a forced change; whatever fails in there,
+      // the button must become usable again.
+      res = await changePassword(currentPassword, newPassword);
+    } catch {
+      setError(
+        tr(
+          'পাসওয়ার্ড পরিবর্তন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+          'The password could not be changed. Please try again.',
+          'تعذر تغيير كلمة المرور. يرجى المحاولة مرة أخرى.'
+        )
+      );
+      return;
+    } finally {
+      setIsSaving(false);
+    }
     if (!res.success) {
       setError(res.error || '');
       return;
