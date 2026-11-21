@@ -75,6 +75,9 @@ alias). Tables:
   `SiteSetting` because they are always edited and read as a whole.
 
 Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.version` once.
+That bump is the transaction's first statement and takes the `SiteMeta` row lock, so writers run
+one after another and each one's version checks see everything the writers before it committed
+(a read before the lock would freeze the transaction's view under REPEATABLE READ).
 
 ## Authentication
 

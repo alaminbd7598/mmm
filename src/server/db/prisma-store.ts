@@ -220,7 +220,13 @@ export class PrismaStore implements DataStore {
     try {
       return await this.db.$transaction(async (tx) => {
         // Bumping first takes the SiteMeta row lock, serialising writers (no deadlocks, stable positions).
-        const meta = await tx.siteMeta.update({ where: { id: META_ID }, data: { version: { increment: 1 } } });
+        // It has to be the first statement of the transaction, and a plain UPDATE: `siteMeta.update`
+        // sends a SELECT before its UPDATE, and under REPEATABLE READ that SELECT would fix what this
+        // transaction sees to the moment before it waited for the lock. The version checks below
+        // would then read rows as they were before the writers ahead of it committed, find no
+        // conflict and overwrite their changes.
+        await tx.$executeRaw`UPDATE \`SiteMeta\` SET \`version\` = \`version\` + 1, \`updatedAt\` = ${new Date()} WHERE \`id\` = ${META_ID}`;
+        const meta = await tx.siteMeta.findUniqueOrThrow({ where: { id: META_ID } });
         const conflicts = await this.writeOps(tx, ops, opts, meta.version);
         // Throwing rolls the whole transaction back, including the version bump.
         if (opts.atomic && conflicts.length) throw new StoreStaleError(conflicts);
