@@ -149,7 +149,7 @@ npm run db:import -- path/to/backup.json
 | বিল্ড লগে `prisma db push failed` বা `Access denied` | `DATABASE_URL`-এর ইউজার, পাসওয়ার্ড বা ডাটাবেসের নাম মিলছে না। ধাপ ২-এর তথ্যের সঙ্গে মিলিয়ে ঠিক করে Redeploy করুন |
 | বিল্ড লগে লাল রঙে `error TS...` | কোডে ভুল আছে। ডেভেলপারকে জানান; আগের ডিপ্লয়টি চালু থাকবে |
 | বিল্ড মাঝপথে `Killed` লিখে থেমে যায় | বিল্ডের জন্য মেমোরি কম পড়েছে (প্রায় ১.৩ GB লাগে)। আবার Redeploy করুন; বারবার হলে Hostinger সাপোর্টকে জানান বা বড় প্ল্যান নিন |
-| লগইন পাতায় "সেটআপ সম্পূর্ণ হয়নি" জাতীয় নির্দেশনা | `JWT_SECRET` (কমপক্ষে ৩২ অক্ষর) বা `ADMIN_BOOTSTRAP_PASSWORD` (কমপক্ষে ১২ অক্ষর) বসানো হয়নি বা নিয়ম মানেনি। ঠিক করে Redeploy করুন |
+| লগইন পাতায় হলুদ বাক্সে `JWT_SECRET` বা `ADMIN_BOOTSTRAP_PASSWORD` যোগ করার নির্দেশনা | `JWT_SECRET` (কমপক্ষে ৩২ অক্ষর) বা `ADMIN_BOOTSTRAP_PASSWORD` (কমপক্ষে ১২ অক্ষর) বসানো হয়নি বা নিয়ম মানেনি। ঠিক করে Redeploy করুন |
 | Runtime logs-এ `ADMIN_BOOTSTRAP_PASSWORD ... refused` | পাসওয়ার্ডটি খুব ছোট বা খুব সহজ। আরও শক্ত পাসওয়ার্ড দিন |
 | `/api/health`-এ `"db":"down"`, সাইটে "সাময়িক সমস্যা" বার্তা | ডাটাবেস সাড়া দিচ্ছে না। hPanel-এ ডাটাবেস চালু আছে কি না দেখুন; `DATABASE_URL`-এর হোস্ট ঠিক আছে কি না মিলিয়ে নিন |
 | Runtime logs-এ `[rate-limit] No client address from the proxy` | ক্ষতিকর কিছু নয়; ডেভেলপারকে জানান (নিচের "ডেভেলপারদের জন্য" অংশে `TRUSTED_PROXY_HOPS` দেখুন) |

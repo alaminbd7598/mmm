@@ -177,12 +177,6 @@ interface CMSContextType {
   demoAccounts: DemoAccount[];
   /** The server setting still missing before staff can sign in (null when sign-in works). */
   loginSetup: LoginSetupIssue | null;
-  loginWithGoogleProfile: (profile: {
-    email: string;
-    displayName: string;
-    photoURL?: string;
-    roleHint?: AdminRole;
-  }) => { success: boolean; error?: string };
   updateCurrentUserProfile: (
     patch: Partial<
       Pick<
@@ -703,20 +697,6 @@ export const CMSProvider: React.FC<{
     );
     return { success: true };
   };
-
-  const loginWithGoogleProfile = (_profile: {
-    email: string;
-    displayName: string;
-    photoURL?: string;
-    roleHint?: AdminRole;
-  }): { success: boolean; error?: string } => ({
-    success: false,
-    error: tr(
-      'Google সাইন-ইন বর্তমানে উপলব্ধ নয়। অনুগ্রহ করে ইউজার আইডি ও পাসওয়ার্ড ব্যবহার করুন।',
-      'Google sign-in is not available; please use your User ID & Password.',
-      'تسجيل الدخول عبر Google غير متاح؛ يرجى استخدام اسم المستخدم وكلمة المرور.'
-    ),
-  });
 
   const updateCurrentUserProfile = (
     patch: Partial<
@@ -2662,7 +2642,6 @@ export const CMSProvider: React.FC<{
         storageMode,
         demoAccounts,
         loginSetup,
-        loginWithGoogleProfile,
         updateCurrentUserProfile,
         logout,
         uploadAndStoreLogo,
