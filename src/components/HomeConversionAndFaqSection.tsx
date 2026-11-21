@@ -288,10 +288,8 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
       void applyAdmissionToken(matchedToken.id, mobile.trim());
     }
 
-    const refId = matchedToken
-      ? `${matchedToken.tokenCode}`
-      : `MMM-${String(Math.floor(100000 + Math.random() * 900000))}`;
-    setSubmittedRef(refId);
+    // The reference shown is one the office can look up: the token code or the stored lead id.
+    setSubmittedRef(matchedToken ? matchedToken.tokenCode : result.leadId);
   };
 
   const resetForm = () => {

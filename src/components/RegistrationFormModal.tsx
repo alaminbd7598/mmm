@@ -480,7 +480,7 @@ export const RegistrationFormModal: React.FC<RegistrationFormModalProps> = ({
       ) : (
         <form onSubmit={handleSubmit} className="space-y-5">
           {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900 text-xs font-semibold text-red-700 dark:text-red-300">
+            <div role="alert" className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900 text-xs font-semibold text-red-700 dark:text-red-300">
               {errorMsg}
             </div>
           )}

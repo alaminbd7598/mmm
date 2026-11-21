@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
+import { apiPostKeepalive } from '../lib/api/client';
 import type { PublicVirtualOfficeStatus } from '../types/cms';
 import { sanitizeVirtualOfficeForPublic } from '../utils/virtualOfficeLogic';
 
@@ -38,7 +39,7 @@ export const VirtualOfficeModal: React.FC<{
   publicStatus: PublicVirtualOfficeStatus;
   initialDeskId?: string;
 }> = ({ isOpen, onClose, publicStatus, initialDeskId }) => {
-  const { language, pushToast, recordLocalVirtualOfficeSession } = useCMS();
+  const { language, pushToast, recordLocalVirtualOfficeSession, publicSubmitError } = useCMS();
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
 
@@ -87,57 +88,46 @@ export const VirtualOfficeModal: React.FC<{
     }
 
     setIsSubmitting(true);
-    try {
-      const res = await fetch('/api/public/virtual-office/checkin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fullName: fullName.trim(),
-          phone: phone.trim(),
-          email: email.trim(),
-          deskId,
-          topic: topic.trim() || undefined,
-          preferredCallbackTime: preferredCallbackTime.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        setErrorMsg(data?.error || 'Validation failed. Please check your details.');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Offline / busy desks answer without join details: the form stays open and a toast confirms.
-      if (data.join) {
-        const join = data.join as Partial<CheckinSuccessPayload>;
-        setUnlocked({
-          deskMode: join.deskMode || 'ONLINE_LIVE',
-          deskNameBn: join.deskNameBn || '',
-          deskNameEn: join.deskNameEn || '',
-          officerNameBn: join.officerNameBn || '',
-          dutyOfficerPhone: join.dutyOfficerPhone || publicStatus.dutyOfficerPhone || '',
-          platform: join.platform || '',
-          roomUrl: join.roomUrl || null,
-          zoomMeetingId: join.zoomMeetingId,
-          zoomPasscode: join.zoomPasscode,
-        });
-      }
-      if (data.session) {
-        recordLocalVirtualOfficeSession(data.session);
-      }
-      pushToast(
-        isLive
-          ? tr('ভার্চুয়াল অফিস রুম আনলক হয়েছে!', 'Virtual Office Room Unlocked!', 'تم فتح المكتب الافتراضي!')
-          : tr('ভিডিও কলব্যাক বুকিং নিশ্চিত হয়েছে!', 'Video Callback Request Confirmed!', 'تم تأكيد طلب الاتصال!'),
-        `${fullName.trim()} (${phone.trim()})`
-      );
-    } catch {
-      setErrorMsg(
-        tr('সার্ভারের সাথে সংযোগ স্থাপন করা যায়নি। পুনরায় চেষ্টা করুন।', 'Network error. Please try again.', 'خطأ في الشبكة.')
-      );
-    } finally {
-      setIsSubmitting(false);
+    const res = await apiPostKeepalive<{
+      join?: Partial<CheckinSuccessPayload>;
+      session?: Parameters<typeof recordLocalVirtualOfficeSession>[0];
+    }>('/api/public/virtual-office/checkin', {
+      fullName: fullName.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+      deskId,
+      topic: topic.trim() || undefined,
+      preferredCallbackTime: preferredCallbackTime.trim() || undefined,
+    });
+    setIsSubmitting(false);
+    // Nothing is confirmed unless the server stored the check-in; the form keeps what was typed.
+    if (!res.ok) {
+      setErrorMsg(publicSubmitError(res));
+      return;
     }
+
+    // Offline / busy desks answer without join details: the form stays open and a toast confirms.
+    const { join, session } = res.data;
+    if (join) {
+      setUnlocked({
+        deskMode: join.deskMode || 'ONLINE_LIVE',
+        deskNameBn: join.deskNameBn || '',
+        deskNameEn: join.deskNameEn || '',
+        officerNameBn: join.officerNameBn || '',
+        dutyOfficerPhone: join.dutyOfficerPhone || publicStatus.dutyOfficerPhone || '',
+        platform: join.platform || '',
+        roomUrl: join.roomUrl || null,
+        zoomMeetingId: join.zoomMeetingId,
+        zoomPasscode: join.zoomPasscode,
+      });
+    }
+    if (session) recordLocalVirtualOfficeSession(session);
+    pushToast(
+      isLive
+        ? tr('ভার্চুয়াল অফিস রুম আনলক হয়েছে!', 'Virtual Office Room Unlocked!', 'تم فتح المكتب الافتراضي!')
+        : tr('ভিডিও কলব্যাক বুকিং নিশ্চিত হয়েছে!', 'Video Callback Request Confirmed!', 'تم تأكيد طلب الاتصال!'),
+      `${fullName.trim()} (${phone.trim()})`
+    );
   };
 
   const handleCopyRoomLink = () => {
@@ -314,7 +304,7 @@ export const VirtualOfficeModal: React.FC<{
               )}
 
               {errorMsg && (
-                <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                <div role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
                   {errorMsg}
                 </div>
               )}
@@ -395,26 +385,28 @@ export const VirtualOfficeModal: React.FC<{
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                <a
-                  href={`https://wa.me/88${unlocked.dutyOfficerPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
-                    `Assalamu Alaikum, I just checked in to Maharat Virtual Office (${fullName} - ${phone}).`
-                  )}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#005a6e] px-3 py-2.5 text-xs font-bold text-white hover:bg-[#004555]"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  {tr('হোয়াটসঅ্যাপে পিং করুন', 'Ping Officer on WhatsApp', 'واتساب المستشار')}
-                </a>
-                <a
-                  href={`tel:${unlocked.dutyOfficerPhone}`}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
-                >
-                  <Phone className="h-4 w-4 text-[#192f64] dark:text-[#f0c95e]" />
-                  {unlocked.dutyOfficerPhone}
-                </a>
-              </div>
+              {unlocked.dutyOfficerPhone && (
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={`https://wa.me/88${unlocked.dutyOfficerPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                      `Assalamu Alaikum, I just checked in to Maharat Virtual Office (${fullName} - ${phone}).`
+                    )}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#005a6e] px-3 py-2.5 text-xs font-bold text-white hover:bg-[#004555]"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    {tr('হোয়াটসঅ্যাপে পিং করুন', 'Ping Officer on WhatsApp', 'واتساب المستشار')}
+                  </a>
+                  <a
+                    href={`tel:${unlocked.dutyOfficerPhone}`}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+                  >
+                    <Phone className="h-4 w-4 text-[#192f64] dark:text-[#f0c95e]" />
+                    {unlocked.dutyOfficerPhone}
+                  </a>
+                </div>
+              )}
             </div>
           )}
         </div>

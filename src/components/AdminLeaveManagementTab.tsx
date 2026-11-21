@@ -3287,7 +3287,7 @@ export const AdminBackupAndAITab: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `craft_institute_full_cms_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `maharat_madrasah_cms_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

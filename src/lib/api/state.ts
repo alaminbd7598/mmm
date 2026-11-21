@@ -8,7 +8,7 @@ import type {
   SyncRequest,
   SyncResponse,
 } from '../../server/contracts';
-import { apiGet, apiPost, type ApiResult } from './client';
+import { apiGet, apiPostKeepalive, type ApiResult } from './client';
 
 export const fetchState = (signal?: AbortSignal): Promise<ApiResult<StateResponse>> =>
   apiGet<StateResponse>('/api/state', signal);
@@ -17,10 +17,10 @@ export const fetchStateMeta = (signal?: AbortSignal): Promise<ApiResult<StateMet
   apiGet<StateMetaResponse>('/api/state/meta', signal);
 
 export const postAdminSync = (baseVersion: number, ops: SyncOp[]): Promise<ApiResult<SyncResponse>> =>
-  apiPost<SyncResponse>('/api/admin/sync', { baseVersion, ops } satisfies SyncRequest);
+  apiPostKeepalive<SyncResponse>('/api/admin/sync', { baseVersion, ops } satisfies SyncRequest);
 
 export const postPublicSubmit = (items: PublicSubmitRequest['items']): Promise<ApiResult<PublicSubmitResponse>> =>
-  apiPost<PublicSubmitResponse>('/api/public/submit', { items } satisfies PublicSubmitRequest);
+  apiPostKeepalive<PublicSubmitResponse>('/api/public/submit', { items } satisfies PublicSubmitRequest);
 
 /**
  * Upper bound for one sync request body. The server's admin sync limit is 12 MB; staying well

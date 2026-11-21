@@ -19,12 +19,22 @@ export interface ApiRequestOptions {
   method?: 'GET' | 'POST';
   body?: unknown;
   signal?: AbortSignal;
+  /**
+   * Let the request finish even if the page is closed or reloaded meanwhile (form submissions).
+   * Browsers cap keepalive bodies at about 64 KB, so larger bodies are sent as normal requests.
+   */
+  keepalive?: boolean;
 }
+
+const KEEPALIVE_MAX_BYTES = 60 * 1024;
 
 const failure = (status: number, code: string, error: string): ApiFailure => ({ ok: false, status, code, error });
 
 export async function apiRequest<T>(path: string, opts: ApiRequestOptions = {}): Promise<ApiResult<T>> {
   const method = opts.method || (opts.body === undefined ? 'GET' : 'POST');
+  const body = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+  // UTF-8 needs at most 3 bytes per UTF-16 code unit, so this bound never exceeds the browser's cap.
+  const keepalive = Boolean(opts.keepalive && body !== undefined && body.length * 3 <= KEEPALIVE_MAX_BYTES);
   let res: Response;
   try {
     res = await fetch(path, {
@@ -32,8 +42,9 @@ export async function apiRequest<T>(path: string, opts: ApiRequestOptions = {}):
       credentials: 'same-origin',
       cache: 'no-store',
       headers: opts.body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      body,
       signal: opts.signal,
+      keepalive,
     });
   } catch (err) {
     const aborted = err instanceof DOMException && err.name === 'AbortError';
@@ -61,3 +72,6 @@ export async function apiRequest<T>(path: string, opts: ApiRequestOptions = {}):
 export const apiGet = <T>(path: string, signal?: AbortSignal) => apiRequest<T>(path, { method: 'GET', signal });
 export const apiPost = <T>(path: string, body: unknown = {}, signal?: AbortSignal) =>
   apiRequest<T>(path, { method: 'POST', body, signal });
+/** POST for visitor form submissions and staff saves: survives the tab closing right after it was sent. */
+export const apiPostKeepalive = <T>(path: string, body: unknown) =>
+  apiRequest<T>(path, { method: 'POST', body, keepalive: true });

@@ -155,7 +155,7 @@ async function newVisitorContext(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, reducedMotion: 'reduce' });
   await ctx.addInitScript(() => {
     try {
-      sessionStorage.setItem('mmm_promo_popup_shown', '1');
+      sessionStorage.setItem('maharat_promo_seen', '1');
     } catch {
       // storage blocked
     }

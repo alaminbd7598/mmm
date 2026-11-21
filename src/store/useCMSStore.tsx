@@ -243,6 +243,8 @@ interface CMSContextType {
     leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>,
     options?: { viaStaffSync?: boolean }
   ) => Promise<InquiryOutcome>;
+  /** Visitor-facing, localized reason why a public endpoint refused or never received a submission. */
+  publicSubmitError: (failure: { status: number; code: string; error?: string }) => string;
   updateLeadStatus: (leadId: string, newStatus: LeadStatus) => EmailNotificationLog | null;
   updateLeadCourse: (leadId: string, newCourseId: string) => void;
   deleteLead: (id: string) => void;
@@ -2826,6 +2828,7 @@ export const CMSProvider: React.FC<{
         updateEvent,
         deleteEvent,
         submitInquiry,
+        publicSubmitError,
         updateLeadStatus,
         updateLeadCourse,
         deleteLead,

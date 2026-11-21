@@ -3829,7 +3829,7 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
                     </div>
 
                     {inqError && (
-                      <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+                      <div role="alert" className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
                         {inqError}
                       </div>
                     )}

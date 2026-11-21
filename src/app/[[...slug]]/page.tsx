@@ -4,7 +4,7 @@ import type { CMSState } from '@/src/types/cms';
 import { getStore } from '@/src/server/db/store';
 import { projectPublicState } from '@/src/server/state/project';
 import ClientApp from '../ClientApp';
-import { SITE_NAME, metadataForPath } from '../seo';
+import { PUBLIC_PAGES, SITE_NAME, metadataForPath } from '../seo';
 
 // Rendered per request: the page carries the current public content (and per-post blog metadata).
 export const dynamic = 'force-dynamic';
@@ -18,9 +18,8 @@ function pathFromSlug(slug?: string[]): string {
   return slug && slug.length > 0 ? `/${slug.join('/')}` : '/';
 }
 
-/** Missing static files (`/assets/...`, `/something.png`) are real 404s, not the website shell. */
-const looksLikeFile = (slug?: string[]): boolean =>
-  Boolean(slug?.length) && (slug![0] === 'assets' || /\.[a-z0-9]{2,5}$/i.test(slug![slug!.length - 1]));
+/** Only the website's own pages and the admin panel render the application; anything else is a 404. */
+const isSitePath = (path: string): boolean => path === '/admin' || Object.hasOwn(PUBLIC_PAGES, path);
 
 /** Larger public states are fetched by the browser instead of being embedded in every page. */
 const MAX_EMBEDDED_STATE_CHARS = 1_500_000;
@@ -68,6 +67,6 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
 
 export default async function Page({ params }: Props) {
   const { slug } = await params;
-  if (looksLikeFile(slug)) notFound();
+  if (!isSitePath(pathFromSlug(slug))) notFound();
   return <ClientApp initialPublicState={await initialPublicState()} />;
 }
