@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import '../index.css';
 import {
   DEFAULT_DESCRIPTION,
@@ -7,11 +8,10 @@ import {
   OG_DESCRIPTION,
   OG_IMAGE,
   SITE_NAME,
-  siteUrl,
+  requestOrigin,
 } from './seo';
 
-export const metadata: Metadata = {
-  metadataBase: siteUrl(),
+const SITE_METADATA: Metadata = {
   title: DEFAULT_TITLE,
   description: DEFAULT_DESCRIPTION,
   keywords: DEFAULT_KEYWORDS,
@@ -32,6 +32,15 @@ export const metadata: Metadata = {
     images: [OG_IMAGE],
   },
 };
+
+/**
+ * Relative metadata URLs (canonical links, Open Graph images) resolve against NEXT_PUBLIC_APP_URL
+ * or, when it is not set, the host the request arrived on.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const origin = requestOrigin(await headers());
+  return { ...SITE_METADATA, metadataBase: new URL(origin || 'http://localhost:3000') };
+}
 
 export const viewport: Viewport = {
   width: 'device-width',

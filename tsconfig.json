@@ -27,7 +27,8 @@
         "./*"
       ]
     },
-    "strict": true
+    "strict": true,
+    "allowJs": true
   },
   "include": [
     "next-env.d.ts",
