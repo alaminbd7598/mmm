@@ -909,8 +909,10 @@ async function main() {
       await page.locator('form input[type="text"]').first().fill(offlineTitle);
       await page.locator('form button[type="submit"]').first().click();
       await page.getByTestId('admin-unsaved-badge').waitFor({ timeout: 15_000 });
+      await page.getByText(offlineTitle).first().waitFor({ timeout: 10_000 });
       // The server is reachable again, but saving fails (as during a database outage).
       let refused = 0;
+      const reconnected = page.waitForResponse((r) => r.url() === `${BASE}/api/state/meta` && r.status() === 200, { timeout: 30_000 });
       await page.unroute('**/api/**');
       await page.route('**/api/admin/sync', (route) => {
         refused += 1;
@@ -920,8 +922,10 @@ async function main() {
           body: JSON.stringify({ ok: false, error: 'The database is temporarily unavailable.', code: 'STORE_UNAVAILABLE' }),
         });
       });
-      await waitForApi(page, '/api/admin/sync');
-      await page.waitForTimeout(2_500);
+      // The poll that notices the connection is back saves at once; that save is refused. Wait
+      // for that poll (not for the save sent right after the edit) and leave time for a reload.
+      await reconnected;
+      await page.waitForTimeout(3_000);
       assert(refused >= 1, 'no save was attempted after reconnecting');
       assert((await page.getByTestId('admin-unsaved-badge').count()) === 1, 'the unsaved badge disappeared although nothing was saved');
       assert((await page.getByText(offlineTitle).count()) > 0, 'the offline edit was replaced by the server state');
