@@ -25,7 +25,7 @@ import type { CMSState } from '../src/types/cms';
 import { getStore } from '../src/server/db/store';
 import { validateNewPassword } from '../src/server/auth/password';
 import { BCRYPT_COST } from '../src/server/db/seed';
-import { plaintextPasswords, stateToOps, summarizeOps } from '../src/server/db/state-ops';
+import { plaintextPasswords, stateToOps, summarizeOps, withoutAuthFields } from '../src/server/db/state-ops';
 
 const KNOWN_KEYS = new Set<string>([...SINGLETON_KEYS, ...COLLECTION_KEYS]);
 const LEGACY_WRAPPER_KEYS = new Set(['version', 'updatedAt', 'exportedAt', 'app']);
@@ -117,7 +117,8 @@ async function main(): Promise<void> {
     hashAll(plaintextPasswords(state, 'careerCandidates')),
   ]);
   const mustChangePassword = Object.fromEntries([...userPasswords.keys()].map((id) => [id, true]));
-  const ops = stateToOps(state, replace ? 'replace' : 'upsert');
+  // Passwords were read above; no auth field from the file reaches the stored documents.
+  const ops = stateToOps(withoutAuthFields(state), replace ? 'replace' : 'upsert');
 
   const store = await getStore();
   const before = await store.getVersion();

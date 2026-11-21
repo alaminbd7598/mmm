@@ -7,7 +7,7 @@ import {
   type SyncOp,
 } from '../contracts';
 import type { CMSState } from '../../types/cms';
-import type { StoredItem } from './documents';
+import { AUTH_COLLECTIONS, type StoredItem } from './documents';
 
 export type CollectionWriteMode = 'replace' | 'upsert';
 
@@ -56,6 +56,29 @@ export function plaintextPasswords(state: Partial<CMSState>, key: 'users' | 'car
     }
   }
   return out;
+}
+
+/**
+ * Fields of user / candidate items that mirror auth columns. A backup file must not carry them
+ * into the stored documents: hashes, session versions and the must-change flag are only ever
+ * written by the store, from the hashes the importer computes (ApplyOpsOptions).
+ */
+export const IMPORTED_AUTH_FIELDS = ['password', 'passwordHash', 'sessionVersion', 'mustChangePassword'] as const;
+
+/** Copy of `state` whose `users` and `careerCandidates` items have no auth fields. Other keys are shared, not copied. */
+export function withoutAuthFields(state: Partial<CMSState>): Partial<CMSState> {
+  const out: Record<string, unknown> = { ...state };
+  for (const key of AUTH_COLLECTIONS) {
+    const list = out[key];
+    if (!Array.isArray(list)) continue;
+    out[key] = list.map((item: unknown) => {
+      if (!isPlainObject(item)) return item;
+      const copy = { ...item };
+      for (const field of IMPORTED_AUTH_FIELDS) delete copy[field];
+      return copy;
+    });
+  }
+  return out as Partial<CMSState>;
 }
 
 export interface KeySummary {
