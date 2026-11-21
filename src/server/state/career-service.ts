@@ -6,7 +6,7 @@ import { getJwtSecret } from '../auth/session-cookie';
 import type { CandidateSession } from '../contracts';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
-import { consume, resetLimit } from '../rate-limit';
+import { beginAttempt, resetLimit } from '../rate-limit';
 import {
   applicationsForCandidate,
   findCandidate,
@@ -66,11 +66,12 @@ export async function loginCandidate(
   const store = await getStore();
   getJwtSecret(store.mode);
   const auth = await store.getCandidateAuthByEmail(email);
-  const passwordOk = await verifyPassword(password, auth?.passwordHash);
-  if (!auth || !passwordOk) {
-    if (throttle) consume(throttle.failureKey, throttle.limit, throttle.windowMs);
-    throw new HttpError(401, 'Invalid email or password.', 'INVALID_CREDENTIALS');
+  // Counted before the password check and cleared only by a successful sign-in (see beginAttempt).
+  if (throttle && !beginAttempt(throttle.failureKey, throttle.limit, throttle.windowMs)) {
+    throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
   }
+  const passwordOk = await verifyPassword(password, auth?.passwordHash);
+  if (!auth || !passwordOk) throw new HttpError(401, 'Invalid email or password.', 'INVALID_CREDENTIALS');
   if (throttle) resetLimit(throttle.failureKey);
 
   const session: CandidateSession = { kind: 'candidate', candidateId: auth.id, email: auth.email, sv: auth.sessionVersion };

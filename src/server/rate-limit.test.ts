@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  beginAttempt,
   GLOBAL_PREFIX,
   MAX_BUCKETS,
   UNKNOWN_CLIENT,
@@ -88,4 +89,25 @@ test('the bucket map is capped; site-wide budgets survive eviction', () => {
   consume(key('late'), 1, 1000, 1, now + 120_000);
   for (let i = 0; i < 10; i += 1) consume(`late-flood:${i}`, 1, 1000, 1, now + 120_000);
   assert.ok(bucketCount() <= MAX_BUCKETS);
+});
+
+test('sign-in lockout: a parallel burst cannot exceed the limit, only a full success clears it', () => {
+  const key = `login-burst-${Math.random()}`;
+  const now = 5_000_000;
+  // Fifty guesses start at the same moment: each is counted before its password check runs.
+  const started = Array.from({ length: 50 }, () => beginAttempt(key, 10, 60_000, now)).filter(Boolean).length;
+  assert.equal(started, 10);
+  assert.equal(isLimited(key, 10, now), true);
+  assert.equal(beginAttempt(key, 10, 60_000, now + 60_001), true, 'a new window starts after the old one ends');
+
+  // Nine wrong passwords, then a correct password with the wrong role: nothing is cleared,
+  // so the tenth failure still locks the account.
+  const account = `login-role-${Math.random()}`;
+  for (let i = 0; i < 9; i += 1) assert.equal(beginAttempt(account, 10, 60_000, now), true);
+  assert.equal(beginAttempt(account, 10, 60_000, now), true); // correct password, role mismatch: no reset
+  assert.equal(beginAttempt(account, 10, 60_000, now), false);
+  // A complete sign-in clears the counter.
+  resetLimit(account);
+  assert.equal(isLimited(account, 10, now), false);
+  assert.equal(beginAttempt(account, 10, 60_000, now), true);
 });

@@ -124,6 +124,16 @@ export function isLimited(key: string, limit: number, now = Date.now()): boolean
   return Boolean(bucket && bucket.count >= limit);
 }
 
+/**
+ * Sign-in lockout, step 1: count the attempt before the password is checked (hashing is slow, so
+ * counting afterwards would let a burst of parallel guesses all start before any is recorded).
+ * False when the account already used its attempts for this window. Step 2 is `resetLimit(key)`
+ * once the sign-in has completely succeeded; every other outcome leaves the attempt counted.
+ */
+export function beginAttempt(key: string, limit: number, windowMs: number, now = Date.now()): boolean {
+  return consume(key, limit, windowMs, 1, now);
+}
+
 /** Forget a counter (e.g. failed-login count after a successful sign-in). */
 export function resetLimit(key: string): void {
   buckets.delete(key);

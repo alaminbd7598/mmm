@@ -23,3 +23,18 @@ export function toSafeUser(profile: AdminUser | undefined, auth: StoredUserAuth)
 export function findProfile(users: AdminUser[] | undefined, userId: string): AdminUser | undefined {
   return (users || []).find((u) => u.id === userId);
 }
+
+/**
+ * Whether a sign-in for `auth` is answered with the setup notice (NOT_CONFIGURED) instead of a
+ * password check: only for an active Super Admin without a password while the site is in its
+ * public "no administrator password yet" state (`adminPasswordPending`, which /api/state already
+ * shows to everyone as `loginSetup`). Outside that state such an account is answered like any
+ * wrong password, so the response says nothing about which accounts exist or lack a password.
+ */
+export async function awaitsBootstrapPassword(
+  auth: Pick<StoredUserAuth, 'role' | 'passwordHash' | 'disabled'> | null,
+  adminPasswordPending: () => Promise<boolean>
+): Promise<boolean> {
+  if (!auth || auth.passwordHash || auth.disabled || normalizeAdminRole(auth.role) !== 'Super Admin') return false;
+  return adminPasswordPending();
+}

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AdminUser } from '../../types/cms';
 import type { StoredUserAuth } from '../contracts';
-import { findProfile, toSafeUser } from './safe-user';
+import { awaitsBootstrapPassword, findProfile, toSafeUser } from './safe-user';
 
 const auth: StoredUserAuth = {
   id: 'u1',
@@ -38,4 +38,22 @@ test('toSafeUser without a profile and findProfile', () => {
   assert.equal(safe.id, 'u1');
   assert.equal(safe.fullName, 'principal');
   assert.equal(findProfile(undefined, 'u1'), undefined);
+});
+
+test('the setup notice is given only for a passwordless Super Admin while the site is in its public setup state', async () => {
+  const admin = { role: 'Super Admin', passwordHash: null, disabled: false } as const;
+  let asked = 0;
+  const pending = (value: boolean) => async () => {
+    asked += 1;
+    return value;
+  };
+  assert.equal(await awaitsBootstrapPassword(admin, pending(true)), true);
+  // Another Super Admin already has a password: answered like a wrong password (no account oracle).
+  assert.equal(await awaitsBootstrapPassword(admin, pending(false)), false);
+  asked = 0;
+  assert.equal(await awaitsBootstrapPassword(null, pending(true)), false);
+  assert.equal(await awaitsBootstrapPassword({ ...admin, passwordHash: '$2b$12$hash' }, pending(true)), false);
+  assert.equal(await awaitsBootstrapPassword({ ...admin, disabled: true }, pending(true)), false);
+  assert.equal(await awaitsBootstrapPassword({ ...admin, role: 'Coordinators / Teachers' }, pending(true)), false);
+  assert.equal(asked, 0, 'the store is not asked for other accounts');
 });

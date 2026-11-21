@@ -4,11 +4,10 @@ import { normalizeAdminRole } from '@/src/utils/cmsLogic';
 import type { LoginResponse } from '@/src/server/contracts';
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertSameOrigin, clientAddress, handleError, json, readJson } from '@/src/server/http';
-import { consume, isLimited, rateLimitClient, resetLimit } from '@/src/server/rate-limit';
+import { beginAttempt, isLimited, rateLimitClient, resetLimit } from '@/src/server/rate-limit';
 import { demoAdminEnabled } from '@/src/server/auth/jwt';
-import { isSuperAdmin } from '@/src/server/state/permissions';
 import { verifyPassword } from '@/src/server/auth/password';
-import { findProfile, toSafeUser } from '@/src/server/auth/safe-user';
+import { awaitsBootstrapPassword, findProfile, toSafeUser } from '@/src/server/auth/safe-user';
 import { createStaffSession, getJwtSecret } from '@/src/server/auth/session';
 
 export const runtime = 'nodejs';
@@ -52,25 +51,29 @@ export async function POST(req: Request) {
     getJwtSecret(store.mode); // fail fast with NOT_CONFIGURED before touching credentials
 
     const auth = await store.getUserAuthByUsername(username);
-    if (auth && !auth.passwordHash && !auth.disabled && isSuperAdmin(auth.role)) {
-      // Fresh database without ADMIN_BOOTSTRAP_PASSWORD: there is no password to check yet.
+    if (await awaitsBootstrapPassword(auth, () => store.adminPasswordPending())) {
+      // Fresh database without ADMIN_BOOTSTRAP_PASSWORD: there is no password to check yet. Only
+      // in that state, which GET /api/state already tells every visitor (`loginSetup`).
       throw new HttpError(
         503,
         'No administrator password has been set. Set ADMIN_BOOTSTRAP_PASSWORD on the server and restart it.',
         'NOT_CONFIGURED'
       );
     }
-    const passwordOk = await verifyPassword(password, auth?.passwordHash);
-    if (!auth || auth.disabled || !passwordOk) {
-      consume(userKey, PER_USER_FAILURE_LIMIT, WINDOW_MS);
-      throw invalidCredentials();
+    // The attempt is counted before the (slow) password check and the counter is cleared only by
+    // a complete sign-in. Parallel guesses therefore cannot all pass the check above before any
+    // failure is recorded, and a correct password with the wrong role does not clear the lockout.
+    if (!beginAttempt(userKey, PER_USER_FAILURE_LIMIT, WINDOW_MS)) {
+      throw new HttpError(429, 'Too many sign-in attempts. Please try again later.', 'RATE_LIMITED');
     }
-    resetLimit(userKey);
+    const passwordOk = await verifyPassword(password, auth?.passwordHash);
+    if (!auth || auth.disabled || !passwordOk) throw invalidCredentials();
 
     const role = normalizeAdminRole(auth.role);
     if (expectedRole && normalizeAdminRole(expectedRole) !== role) {
       throw new HttpError(403, 'This account does not have the selected role.', 'ROLE_MISMATCH');
     }
+    resetLimit(userKey);
 
     await createStaffSession(await cookies(), {
       kind: 'staff',
