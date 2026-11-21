@@ -1291,6 +1291,7 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     (g) => g.directPage === currentPage || g.items?.some((it) => it.page === currentPage)
   );
   const activeNavItem = activeGroupForPage?.items?.find((it) => it.page === currentPage);
+  const BannerTitle = currentPage === 'blog' ? 'p' : 'h1';
 
   return (
     <div
@@ -1829,11 +1830,12 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
             </div>
 
             <div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
+              {/* The blog renders its own page / article heading, so its banner title is not a second h1. */}
+              <BannerTitle className="text-2xl sm:text-3xl font-extrabold text-white">
                 {activeNavItem
                   ? activeNavItem.title[language]
                   : activeGroupForPage?.label[language]}
-              </h1>
+              </BannerTitle>
               {activeNavItem && (
                 <p className="text-xs sm:text-sm text-sky-100/85 mt-1">
                   {activeNavItem.subtitle[language]}

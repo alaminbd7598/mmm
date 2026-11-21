@@ -28,7 +28,7 @@ import {
   type SyncResponse,
 } from '../../server/contracts';
 import { MAX_SYNC_REQUEST_BYTES, fetchState, fetchStateMeta, postAdminSync, postPublicSubmit } from '../../lib/api/state';
-import { chunkOps, computeOps, deepEqual, fullReplaceOps } from './diff';
+import { chunkOps, computeOps, fullReplaceOps, reuseUnchanged } from './diff';
 import { describeSyncRejection } from './rejection';
 import { buildClientFallbackState, stripConfirmedSecrets, stripSecrets } from './state-shape';
 
@@ -56,20 +56,6 @@ const CLIENT_FALLBACK_STATE = buildClientFallbackState();
 
 const mergeServerState = (raw: Partial<CMSState>): CMSState =>
   stripSecrets(mergeLiveCMSState(raw, CLIENT_FALLBACK_STATE, { authoritative: true }));
-
-/**
- * `next` with every top-level value that is structurally equal to `prev`'s replaced by `prev`'s
- * object, so a background refresh does not hand components new objects for unchanged data (and
- * e.g. reset an admin form that is being typed into).
- */
-export function reuseUnchanged(prev: CMSState, next: CMSState): CMSState {
-  const out: Record<string, unknown> = { ...next };
-  const before = prev as unknown as Record<string, unknown>;
-  for (const key of Object.keys(out)) {
-    if (before[key] !== out[key] && deepEqual(before[key], out[key])) out[key] = before[key];
-  }
-  return out as unknown as CMSState;
-}
 
 /** Public projection embedded in the page by the server (see src/app/[[...slug]]/page.tsx). */
 let serverProvidedState: Partial<CMSState> | null = null;

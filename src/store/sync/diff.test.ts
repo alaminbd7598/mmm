@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SyncOp } from '../../server/contracts';
-import { chunkOps, computeOps, deepEqual, fullReplaceOps } from './diff';
+import type { CMSState } from '../../types/cms';
+import { chunkOps, computeOps, deepEqual, fullReplaceOps, reuseUnchanged } from './diff';
 
 const news = (id: string, text = id) => ({ id, text, active: true, createdAt: '2026-01-01' });
 
@@ -100,4 +101,14 @@ test('chunkOps sends an op larger than the limit on its own', () => {
   const big: SyncOp = { op: 'set', key: 'settings', value: { blob: 'z'.repeat(5_000) } };
   const small: SyncOp = { op: 'delete', key: 'news', id: 'n1' };
   assert.deepEqual(chunkOps([small, big, small], 1_000), [[small], [big], [small]]);
+});
+
+test('reuseUnchanged keeps the previous objects for unchanged keys and takes changed ones', () => {
+  const prev = { settings: { phone: '1' }, news: [news('n1')], notices: [{ id: 'a' }] } as unknown as CMSState;
+  const next = { settings: { phone: '1' }, news: [news('n1'), news('n2')], notices: [{ id: 'a' }] } as unknown as CMSState;
+  const out = reuseUnchanged(prev, next);
+  assert.equal(out.settings, prev.settings);
+  assert.equal(out.notices, prev.notices);
+  assert.equal(out.news, next.news);
+  assert.deepEqual(out, next);
 });

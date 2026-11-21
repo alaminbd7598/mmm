@@ -47,6 +47,20 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   return true;
 }
 
+/**
+ * `next` with every top-level value that is structurally equal to `prev`'s replaced by `prev`'s
+ * object, so a background refresh does not hand components new objects for unchanged data (and
+ * e.g. reset an admin form that is being typed into).
+ */
+export function reuseUnchanged(prev: CMSState, next: CMSState): CMSState {
+  const out: Record<string, unknown> = { ...next };
+  const before = prev as unknown as Record<string, unknown>;
+  for (const key of Object.keys(out)) {
+    if (before[key] !== out[key] && deepEqual(before[key], out[key])) out[key] = before[key];
+  }
+  return out as unknown as CMSState;
+}
+
 const readKey = (state: StateLike, key: StateKey): unknown => (state as Record<string, unknown>)[key];
 
 /** Items of a collection that carry a usable string id (others cannot be stored per item). */

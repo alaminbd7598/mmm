@@ -2546,9 +2546,13 @@ export function mergeLiveCMSState(
     ? incomingSettings.storedLogos
     : [];
   const mergedLogos = [...savedLogos];
-  for (const preset of fallbackState.settings.storedLogos || []) {
-    if (!mergedLogos.some((l) => l.url === preset.url)) {
-      mergedLogos.push(preset);
+  // Stored state keeps exactly its own logo vault (a removed preset stays removed); backups and
+  // seed content are topped up with the built-in presets.
+  if (!authoritative || !Array.isArray(incomingSettings.storedLogos)) {
+    for (const preset of fallbackState.settings.storedLogos || []) {
+      if (!mergedLogos.some((l) => l.url === preset.url)) {
+        mergedLogos.push(preset);
+      }
     }
   }
 
@@ -2581,10 +2585,10 @@ export function mergeLiveCMSState(
         ...DEFAULT_SEO_META_CONFIG,
         ...(fallbackState.settings.seoConfig || {}),
         ...(incomingSettings.seoConfig || {}),
-        pageOverrides:
-          incomingSettings.seoConfig?.pageOverrides && incomingSettings.seoConfig.pageOverrides.length
-            ? incomingSettings.seoConfig.pageOverrides
-            : fallbackState.settings.seoConfig?.pageOverrides || DEFAULT_SEO_META_CONFIG.pageOverrides,
+        pageOverrides: list(
+          incomingSettings.seoConfig?.pageOverrides,
+          fallbackState.settings.seoConfig?.pageOverrides || DEFAULT_SEO_META_CONFIG.pageOverrides
+        ),
       },
     },
     popupConfig: {
