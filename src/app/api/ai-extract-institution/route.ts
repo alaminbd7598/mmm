@@ -3,7 +3,13 @@ import { HttpError, assertSameOrigin, handleError, json, rateLimit, readJson } f
 import { getGenAI, getGeminiModel } from '@/src/server/ai/gemini';
 import { storageMode } from '@/src/server/db/store';
 import { parseModelJson } from '@/src/server/ai/json';
-import { EXTRACT_RESPONSE_SCHEMA, buildExtractionParts, extractRequestSchema } from '@/src/server/ai/institution-extract';
+import {
+  EXTRACT_RESPONSE_SCHEMA,
+  EXTRACT_SYSTEM_INSTRUCTION,
+  buildExtractionParts,
+  extractRequestSchema,
+  sanitizeExtraction,
+} from '@/src/server/ai/institution-extract';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,15 +43,15 @@ export async function POST(req: Request) {
         model: getGeminiModel(),
         contents: { role: 'user', parts },
         config: {
+          systemInstruction: EXTRACT_SYSTEM_INSTRUCTION,
           responseMimeType: 'application/json',
           responseSchema: EXTRACT_RESPONSE_SCHEMA,
           abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
         },
       });
-      const extracted = parseModelJson(response.text);
-      if (!extracted || typeof extracted !== 'object' || Array.isArray(extracted)) {
-        return json({ aiExtracted: null, fallbackReason: 'AI_BAD_RESPONSE' });
-      }
+      // Only the schema's fields, bounded in size, are passed on (the model read third-party documents).
+      const extracted = sanitizeExtraction(parseModelJson(response.text));
+      if (!extracted) return json({ aiExtracted: null, fallbackReason: 'AI_BAD_RESPONSE' });
       return json({ aiExtracted: extracted });
     } catch (err) {
       console.warn('[api/ai-extract-institution] Gemini request failed:', err instanceof Error ? err.name : 'unknown');
