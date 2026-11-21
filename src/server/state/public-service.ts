@@ -1,6 +1,7 @@
 import 'server-only';
 import { getCandidateSession } from '../auth/candidate-session';
 import type { PublicSubmitResponse } from '../contracts';
+import { applyPlanned } from '../db/optimistic';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
 import { findPublicTokenMatch, planTokenApply, type ContactQuery, type PublicTokenMatch } from './admission-token';
@@ -72,33 +73,37 @@ export async function runPublicSubmit(rawBody: unknown, clientAddress: string): 
   assertSubmissionBudget(parsed.items, clientAddress);
 
   const store = await getStore();
-  const [snapshot, candidate] = await Promise.all([
-    store.getSnapshot(),
-    parsed.items.some((i) => i.key === 'careerApplications') ? getCandidateSession().catch(() => null) : null,
-  ]);
+  const candidate = parsed.items.some((i) => i.key === 'careerApplications')
+    ? await getCandidateSession().catch(() => null)
+    : null;
   const uploads = countUploads(parsed.items);
-  if (uploads.files > 0 && storedUploadChars(snapshot.state) + uploads.chars > maxStoredUploadChars()) {
-    if (!warnedUploadsFull) {
-      warnedUploadsFull = true;
-      console.warn(
-        '[uploads] Stored photos and CVs reached MAX_STORED_UPLOAD_MB; new files are refused. Delete old leads or applications, or raise the limit.'
+  // Planned from a snapshot and applied only if the records it updates (a repeat submission is
+  // merged into its lead) are unchanged since; otherwise planned again. The budgets above were
+  // consumed once and are not touched by a retry.
+  const { plan, result } = await applyPlanned(store, (snapshot) => {
+    if (uploads.files > 0 && storedUploadChars(snapshot.state) + uploads.chars > maxStoredUploadChars()) {
+      if (!warnedUploadsFull) {
+        warnedUploadsFull = true;
+        console.warn(
+          '[uploads] Stored photos and CVs reached MAX_STORED_UPLOAD_MB; new files are refused. Delete old leads or applications, or raise the limit.'
+        );
+      }
+      throw new HttpError(
+        507,
+        'File uploads are not available at the moment. Please submit without the file.',
+        'UPLOADS_UNAVAILABLE'
       );
     }
-    throw new HttpError(
-      507,
-      'File uploads are not available at the moment. Please submit without the file.',
-      'UPLOADS_UNAVAILABLE'
-    );
-  }
-  const now = new Date();
-  const plan = planPublicSubmit(parsed.items, snapshot.state, {
-    now,
-    timestamp: formatDisplayTimestamp(now),
-    newId,
-    candidate,
+    const now = new Date();
+    const planned = planPublicSubmit(parsed.items, snapshot.state, {
+      now,
+      timestamp: formatDisplayTimestamp(now),
+      newId,
+      candidate,
+    });
+    if (!planned.ok) throw new HttpError(400, planned.error, planned.code);
+    return planned;
   });
-  if (!plan.ok) throw new HttpError(400, plan.error, plan.code);
-  const result = await store.applyOps(plan.ops);
   return { ok: true, version: result.version, ids: plan.ids };
 }
 
@@ -112,9 +117,11 @@ export async function applyAdmissionToken(
   input: ContactQuery & { tokenId: string; leadId?: string }
 ): Promise<{ version: number; tokenCode: string }> {
   const store = await getStore();
-  const snapshot = await store.getSnapshot();
-  const plan = planTokenApply(snapshot.state, input, new Date().toISOString());
-  if (!plan.ok) throw new HttpError(plan.status, plan.error, plan.code);
-  const result = await store.applyOps([plan.op]);
+  // Re-planned when staff changed the token between the read and the write (it may no longer be Active).
+  const { plan, result } = await applyPlanned(store, (snapshot) => {
+    const planned = planTokenApply(snapshot.state, input, new Date().toISOString());
+    if (!planned.ok) throw new HttpError(planned.status, planned.error, planned.code);
+    return { ops: [planned.op], tokenCode: planned.tokenCode };
+  });
   return { version: result.version, tokenCode: plan.tokenCode };
 }

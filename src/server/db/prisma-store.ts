@@ -26,7 +26,7 @@ import {
   type ApplyOpsOptions,
   type StoredItem,
 } from './documents';
-import { StoreConflictError, StoreNotFoundError, StoreUnavailableError } from './errors';
+import { StoreConflictError, StoreNotFoundError, StoreStaleError, StoreUnavailableError } from './errors';
 import type { DbClient } from './prisma-client';
 import { COLLECTION_TABLES, POSITION_ORDER, type CollectionTable, type Tx } from './prisma-tables';
 import type { SeedPlan } from './seed';
@@ -73,8 +73,14 @@ function translateError(err: unknown): unknown {
 }
 
 /** Whether an op must be skipped because its target was written after the version the sender saw. */
-function isStale(rowVersion: number | undefined, opBase: number | undefined, opts: ApplyOpsOptions): boolean {
-  if (opts.baseVersion === undefined || rowVersion === undefined) return false;
+function isStale(
+  rowVersion: number | undefined,
+  opBase: number | undefined,
+  opts: ApplyOpsOptions,
+  writeVersion: number
+): boolean {
+  // A row written earlier in this same transaction is not somebody else's change.
+  if (opts.baseVersion === undefined || rowVersion === undefined || rowVersion === writeVersion) return false;
   return rowVersion > (opBase ?? opts.baseVersion);
 }
 
@@ -216,6 +222,8 @@ export class PrismaStore implements DataStore {
         // Bumping first takes the SiteMeta row lock, serialising writers (no deadlocks, stable positions).
         const meta = await tx.siteMeta.update({ where: { id: META_ID }, data: { version: { increment: 1 } } });
         const conflicts = await this.writeOps(tx, ops, opts, meta.version);
+        // Throwing rolls the whole transaction back, including the version bump.
+        if (opts.atomic && conflicts.length) throw new StoreStaleError(conflicts);
         return {
           version: meta.version,
           updatedAt: meta.updatedAt.toISOString(),
@@ -235,7 +243,7 @@ export class PrismaStore implements DataStore {
         case 'set': {
           const data = JSON.stringify(op.value);
           const existing = await tx.siteSetting.findUnique({ where: { key: op.key }, select: { version: true } });
-          if (isStale(existing?.version, op.base, opts)) {
+          if (isStale(existing?.version, op.base, opts, version)) {
             conflicts.push(index);
             break;
           }
@@ -253,7 +261,7 @@ export class PrismaStore implements DataStore {
           const t = COLLECTION_TABLES[op.key];
           const where = { ...t.scope, id: op.id };
           const existing = await t.delegate(tx).findFirst({ where, select: { id: true, position: true, version: true } });
-          if (isStale(existing?.version, op.base, opts)) {
+          if (isStale(existing?.version, op.base, opts, version)) {
             conflicts.push(index);
             break;
           }
@@ -287,8 +295,10 @@ export class PrismaStore implements DataStore {
       // A password set by an administrator signs the account out everywhere.
       fields.sessionVersion = (previous?.sessionVersion ?? 0) + (newHash && previous ? 1 : 0);
     } else if (key === 'careerCandidates') {
-      fields.passwordHash = opts.candidatePasswordHashes?.[item.id] ?? previous?.passwordHash ?? null;
-      fields.sessionVersion = previous?.sessionVersion ?? 0;
+      const newHash = opts.candidatePasswordHashes?.[item.id];
+      fields.passwordHash = newHash ?? previous?.passwordHash ?? null;
+      // A replaced password (backup import) signs the candidate out everywhere, like a staff reset.
+      fields.sessionVersion = (previous?.sessionVersion ?? 0) + (newHash && previous ? 1 : 0);
     }
     return fields;
   }
@@ -314,7 +324,7 @@ export class PrismaStore implements DataStore {
     const item = sanitizeItem(key, raw);
     const where = { ...t.scope, id: item.id };
     const existing = await d.findFirst({ where, select: this.authSelect(key) });
-    if (isStale(existing?.version, opBase, opts)) return false;
+    if (isStale(existing?.version, opBase, opts, version)) return false;
     const fields = this.rowFields(key, item, opts, existing, version);
     if (existing) {
       await d.updateMany({ where, data: fields });

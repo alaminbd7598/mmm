@@ -12,7 +12,7 @@ import {
   type UserAuthState,
 } from './memory-state';
 import type { SeedPlan } from './seed';
-import { StoreNotFoundError } from './errors';
+import { StoreNotFoundError, StoreStaleError } from './errors';
 
 export class MemoryStore implements DataStore {
   readonly mode = 'demo' as const;
@@ -63,7 +63,9 @@ export class MemoryStore implements DataStore {
     await this.init();
     const conflicts: number[] = [];
     // Synchronous swap: concurrent callers cannot interleave inside one call.
-    this.data = applyOpsToMemory(this.data, ops, opts, undefined, true, conflicts);
+    const next = applyOpsToMemory(this.data, ops, opts, undefined, true, conflicts);
+    if (opts.atomic && conflicts.length) throw new StoreStaleError(conflicts);
+    this.data = next;
     return { version: this.data.version, updatedAt: this.data.updatedAt, ...(conflicts.length ? { conflicts } : {}) };
   }
 

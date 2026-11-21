@@ -4,7 +4,7 @@ import type { SyncOp } from '../contracts';
 import { MemoryStore } from './memory-store';
 import { applyOpsToMemory, emptyMemoryData, memorySnapshotState, type MemoryData } from './memory-state';
 import type { SeedPlan } from './seed';
-import { StoreNotFoundError } from './errors';
+import { StoreNotFoundError, StoreStaleError } from './errors';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
@@ -256,4 +256,62 @@ test('MemoryStore snapshots are cached per version, frozen, and rebuilt after a 
   assert.equal(second.version, 2);
   assert.equal(second.state.news.length, 1);
   assert.equal(await store.adminPasswordPending(), false);
+});
+
+test('atomic: one conflicting op rolls the whole batch back and reports the stale indexes', async () => {
+  const store = new MemoryStore(fixturePlan);
+  await store.applyOps([{ op: 'upsert', key: 'notices', item: { id: 'n1', title: 'first' } }]); // version 2
+  await store.applyOps([{ op: 'upsert', key: 'notices', item: { id: 'n1', title: 'edit by A' } }]); // version 3
+  const before = await store.getSnapshot();
+  await assert.rejects(
+    store.applyOps(
+      [
+        { op: 'upsert', key: 'notices', item: { id: 'n2', title: 'new from B' } },
+        { op: 'upsert', key: 'notices', item: { id: 'n1', title: 'edit by B' } },
+      ],
+      { baseVersion: 2, atomic: true }
+    ),
+    (err: unknown) => err instanceof StoreStaleError && err.conflicts.join() === '1' && err.code === 'STALE'
+  );
+  assert.equal(await store.getSnapshot(), before, 'nothing written, version not bumped');
+  // Without a conflict the atomic batch applies like any other.
+  const ok = await store.applyOps([{ op: 'upsert', key: 'notices', item: { id: 'n1', title: 'edit by B' } }], {
+    baseVersion: 3,
+    atomic: true,
+  });
+  assert.equal(ok.version, 4);
+  assert.equal(ok.conflicts, undefined);
+});
+
+test('a document written twice in one call does not conflict with itself', async () => {
+  const store = new MemoryStore(fixturePlan);
+  const first = await store.applyOps([{ op: 'upsert', key: 'notices', item: { id: 'n1', title: 'first' } }]);
+  const result = await store.applyOps(
+    [
+      { op: 'upsert', key: 'notices', item: { id: 'n1', title: 'second' } },
+      { op: 'upsert', key: 'notices', item: { id: 'n1', title: 'third' } },
+      { op: 'set', key: 'popupConfig', value: { enabled: true } },
+      { op: 'set', key: 'popupConfig', value: { enabled: false } },
+    ],
+    { baseVersion: first.version, atomic: true }
+  );
+  assert.equal(result.conflicts, undefined);
+  const { state } = await store.getSnapshot();
+  assert.equal((state.notices as unknown as Array<{ title: string }>)[0].title, 'third');
+  assert.deepEqual(state.popupConfig, { enabled: false });
+});
+
+test('a replaced candidate password signs the candidate out; a new account starts at session version 0', async () => {
+  const store = new MemoryStore(fixturePlan);
+  const candidate = { id: 'cand-1', fullName: 'A', email: 'a@example.test', phone: '017', createdAt: NOW };
+  await store.applyOps([{ op: 'upsert', key: 'careerCandidates', item: candidate }], { candidatePasswordHashes: { 'cand-1': 'h1' } });
+  assert.equal((await store.getCandidateAuthByEmail('a@example.test'))?.sessionVersion, 0);
+  await store.applyOps([{ op: 'upsert', key: 'careerCandidates', item: { ...candidate, phone: '018' } }]);
+  assert.equal((await store.getCandidateAuthByEmail('a@example.test'))?.sessionVersion, 0, 'profile edits keep sessions');
+  await store.applyOps([{ op: 'upsert', key: 'careerCandidates', item: candidate }], { candidatePasswordHashes: { 'cand-1': 'h2' } });
+  const auth = await store.getCandidateAuthByEmail('a@example.test');
+  assert.equal(auth?.passwordHash, 'h2');
+  assert.equal(auth?.sessionVersion, 1);
+  await store.applyOps([{ op: 'replace', key: 'careerCandidates', items: [candidate] }], { candidatePasswordHashes: { 'cand-1': 'h3' } });
+  assert.equal((await store.getCandidateAuthByEmail('a@example.test'))?.sessionVersion, 2);
 });

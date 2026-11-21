@@ -1,3 +1,4 @@
+import { applyPlanned } from '@/src/server/db/optimistic';
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertRateLimit, assertSameOrigin, handleError, json, readJson } from '@/src/server/http';
 import { virtualOfficeCheckinSchema } from '@/src/utils/virtualOfficeLogic';
@@ -28,12 +29,13 @@ export async function POST(req: Request) {
       );
     }
 
-    const store = await getStore();
-    const { state } = await store.getSnapshot();
-    const config = getEffectiveVirtualOfficeConfig(state.virtualOfficeConfig);
-    const plan = planVirtualOfficeCheckin(parsed.data, config, new Date(), state.leads || []);
-    await store.applyOps(checkinOps(plan, storedSessions(state).map((s) => s.id)));
-    return json(checkinResponse(plan));
+    // A returning visitor gets a note on the stored lead; re-planned if that lead changed meanwhile.
+    const { plan } = await applyPlanned(await getStore(), ({ state }) => {
+      const config = getEffectiveVirtualOfficeConfig(state.virtualOfficeConfig);
+      const checkin = planVirtualOfficeCheckin(parsed.data, config, new Date(), state.leads || []);
+      return { checkin, ops: checkinOps(checkin, storedSessions(state).map((s) => s.id)) };
+    });
+    return json(checkinResponse(plan.checkin));
   } catch (err) {
     return handleError(err);
   }

@@ -1,4 +1,5 @@
 import type { SyncOp } from '@/src/server/contracts';
+import { applyPlanned } from '@/src/server/db/optimistic';
 import { getStore } from '@/src/server/db/store';
 import { HttpError, assertRateLimit, handleError, json, readJson } from '@/src/server/http';
 import {
@@ -38,14 +39,17 @@ export async function POST(req: Request) {
       throw new HttpError(400, `${where}${issue?.message || 'Invalid blog post payload.'}`, 'BAD_REQUEST');
     }
 
-    const existingSlugs = new Set((state.blogPosts || []).map((p) => p.slug));
-    const post = buildWebhookBlogPost(parsed.data, config, existingSlugs, new Date());
-    const ops: SyncOp[] = [
-      { op: 'upsert', key: 'blogPosts', item: post as unknown as { id: string } & Record<string, unknown> },
-      { op: 'order', key: 'blogPosts', ids: [post.id] },
-    ];
-    const saved = await store.applyOps(ops);
-    return json({ ok: true, post, version: saved.version }, 201);
+    // Planned from the snapshot it is checked against, like every other server-made write.
+    const { plan, result } = await applyPlanned(store, (snapshot) => {
+      const existingSlugs = new Set((snapshot.state.blogPosts || []).map((p) => p.slug));
+      const post = buildWebhookBlogPost(parsed.data, snapshot.state.blogAutomationConfig, existingSlugs, new Date());
+      const ops: SyncOp[] = [
+        { op: 'upsert', key: 'blogPosts', item: post as unknown as { id: string } & Record<string, unknown> },
+        { op: 'order', key: 'blogPosts', ids: [post.id] },
+      ];
+      return { post, ops };
+    });
+    return json({ ok: true, post: plan.post, version: result.version }, 201);
   } catch (err) {
     return handleError(err);
   }

@@ -273,6 +273,13 @@ export interface ApplyOpsOptions {
    * op's `base` (or this value). Omitted for server-originated writes, which always apply.
    */
   baseVersion?: number;
+  /**
+   * With `baseVersion`: all or nothing. When any op conflicts, nothing is written, the version is
+   * not bumped and the call fails with `StoreStaleError` (src/server/db/errors.ts) instead of
+   * returning `conflicts`. For writes planned from a snapshot (read, plan, apply) and for batches
+   * whose ops only make sense together.
+   */
+  atomic?: boolean;
 }
 
 export interface ApplyOpsResult {

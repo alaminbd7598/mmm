@@ -83,9 +83,11 @@ function writeCandidateAuth(
   opts: ApplyOpsOptions,
   previous: CandidateAuthState | undefined
 ): void {
+  const hash = opts.candidatePasswordHashes?.[id];
   auth.set(id, {
-    passwordHash: opts.candidatePasswordHashes?.[id] ?? previous?.passwordHash ?? null,
-    sessionVersion: previous?.sessionVersion ?? 0,
+    passwordHash: hash ?? previous?.passwordHash ?? null,
+    // A replaced password (backup import) signs the candidate out everywhere, like a staff reset.
+    sessionVersion: (previous?.sessionVersion ?? 0) + (hash && previous ? 1 : 0),
   });
 }
 
@@ -117,7 +119,9 @@ export function applyOpsToMemory(
   const version = bumpVersion ? data.version + 1 : data.version;
   const stale = (row: string, opBase: number | undefined): boolean => {
     const written = next.rowVersions.get(row);
-    return opts.baseVersion !== undefined && written !== undefined && written > (opBase ?? opts.baseVersion);
+    // A document written earlier in this same call is not somebody else's change.
+    if (opts.baseVersion === undefined || written === undefined || (bumpVersion && written === version)) return false;
+    return written > (opBase ?? opts.baseVersion);
   };
 
   for (const [index, op] of ops.entries()) {

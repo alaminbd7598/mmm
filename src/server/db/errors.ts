@@ -13,3 +13,14 @@ export class StoreConflictError extends Error {
 export class StoreUnavailableError extends Error {
   readonly code = 'STORE_UNAVAILABLE';
 }
+
+/**
+ * An atomic write (`ApplyOpsOptions.atomic`) was planned from a state that has changed since:
+ * nothing was written. `conflicts` holds the indexes of the ops whose targets were newer.
+ */
+export class StoreStaleError extends Error {
+  readonly code = 'STALE';
+  constructor(readonly conflicts: readonly number[] = []) {
+    super('The data changed while this write was being prepared; nothing was written.');
+  }
+}
