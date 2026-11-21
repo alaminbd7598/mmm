@@ -4,8 +4,11 @@
  * scaled down and re-encoded as JPEG before they are attached to a form.
  */
 
-/** Decoded size the form aims for; safely below the server limit (MAX_PHOTO_BYTES). */
-export const UPLOAD_PHOTO_TARGET_BYTES = 1_200_000;
+/**
+ * Decoded size the form aims for: ample for a passport-style photo and far below the server limit
+ * (MAX_PHOTO_BYTES), because every stored photo counts against the site's upload storage.
+ */
+export const UPLOAD_PHOTO_TARGET_BYTES = 350_000;
 
 const dataUrlBytes = (dataUrl: string): number => Math.floor(((dataUrl.split(',')[1] || '').length * 3) / 4);
 
@@ -33,7 +36,7 @@ const loadImage = (src: string): Promise<HTMLImageElement> =>
 export async function photoFileToDataUrl(
   file: Blob,
   maxBytes: number = UPLOAD_PHOTO_TARGET_BYTES,
-  maxSide = 1600
+  maxSide = 1200
 ): Promise<string> {
   const original = await readAsDataUrl(file);
   if (dataUrlBytes(original) <= maxBytes) return original;

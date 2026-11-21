@@ -15,17 +15,25 @@ const DAY_MS = 24 * HOUR_MS;
 /** Records one phone number may create per hour (a family registering several children fits easily). */
 const PER_PHONE_HOURLY_LIMIT = 8;
 /** Inline files (student photos, CVs) one client address may upload per day, and their total size. */
-export const PER_CLIENT_DAILY_UPLOADS = 12;
+const PER_CLIENT_DAILY_UPLOADS = 12;
 const PER_CLIENT_DAILY_UPLOAD_BYTES = 24 * 1024 * 1024;
 /** All anonymous submissions per day, and the inline files they may carry. */
 const GLOBAL_DAILY_SUBMISSIONS = 2000;
-const GLOBAL_DAILY_UPLOAD_BYTES = 150 * 1024 * 1024;
+const GLOBAL_DAILY_UPLOAD_BYTES = 60 * 1024 * 1024;
+const DEFAULT_MAX_STORED_UPLOAD_MB = 160;
+
 /**
- * Ceiling for inline files kept in visitor-created records (base64 characters). They live in the
- * database and in the cached snapshot, so beyond this size new files are refused until staff
- * delete old applications; submissions without a file are still accepted.
+ * Ceiling for inline files kept in visitor-created records (base64 size). They live in the
+ * database and in the cached snapshot, so beyond it new files are refused until staff delete old
+ * leads or applications; submissions without a file are still accepted.
+ * MAX_STORED_UPLOAD_MB (default 160) raises or lowers it for the hosting plan's memory.
  */
-export const MAX_STORED_UPLOAD_CHARS = 400 * 1024 * 1024;
+function maxStoredUploadChars(): number {
+  const raw = Number.parseInt(process.env.MAX_STORED_UPLOAD_MB ?? '', 10);
+  return (Number.isInteger(raw) && raw >= 0 ? raw : DEFAULT_MAX_STORED_UPLOAD_MB) * 1024 * 1024;
+}
+
+let warnedUploadsFull = false;
 
 const tooMany = () => new HttpError(429, 'Too many submissions. Please try again later.', 'RATE_LIMITED');
 
@@ -69,7 +77,13 @@ export async function runPublicSubmit(rawBody: unknown, clientAddress: string): 
     parsed.items.some((i) => i.key === 'careerApplications') ? getCandidateSession().catch(() => null) : null,
   ]);
   const uploads = countUploads(parsed.items);
-  if (uploads.files > 0 && storedUploadChars(snapshot.state) + uploads.chars > MAX_STORED_UPLOAD_CHARS) {
+  if (uploads.files > 0 && storedUploadChars(snapshot.state) + uploads.chars > maxStoredUploadChars()) {
+    if (!warnedUploadsFull) {
+      warnedUploadsFull = true;
+      console.warn(
+        '[uploads] Stored photos and CVs reached MAX_STORED_UPLOAD_MB; new files are refused. Delete old leads or applications, or raise the limit.'
+      );
+    }
     throw new HttpError(
       507,
       'File uploads are not available at the moment. Please submit without the file.',

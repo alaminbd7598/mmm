@@ -79,7 +79,8 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
   Vercel `x-vercel-forwarded-for`. Client-supplied left-hand entries are never used; requests
   without a trustworthy address share one larger bucket per limit. Login also locks per username.
 - Anonymous submissions: zod field whitelists, per-item file size, 6 MB body, per-address and
-  site-wide daily caps for submissions and uploaded bytes, ceiling on stored inline files.
+  site-wide daily caps for submissions and uploaded bytes, ceiling on stored inline files
+  (`MAX_STORED_UPLOAD_MB`; they are part of the cached snapshot, so they are bounded by memory).
 - Stored content rules (`src/utils/safeUrl.ts`, `src/server/state/document-rules.ts`): URL fields
   accept http(s), mailto, tel and same-site values; inline data only as raster images (never in
   link or embed fields) or PDF/Word in file fields; iframes only from the embed host allowlist.
@@ -135,5 +136,5 @@ calling `setState`. The persistence layer changes:
 `DATABASE_URL`, `JWT_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-4-hydrogen`),
 `NEXT_PUBLIC_APP_URL`, `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (first sign-in),
 `TRUSTED_PROXY_HOPS` (optional, default 1), `DEMO_MODE=1` (demo admin in production),
-`CHAT_DAILY_LIMIT` (optional, default 3000),
+`CHAT_DAILY_LIMIT` (optional, default 3000), `MAX_STORED_UPLOAD_MB` (optional, default 160),
 `NEXT_OUTPUT=standalone` (Docker only).
