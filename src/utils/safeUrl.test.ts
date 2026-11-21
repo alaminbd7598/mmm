@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSeedState } from '../server/db/seed';
-import { findUnsafeString, isAllowedUrlFieldValue, isUnsafeStoredString } from './safeUrl';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { findUnsafeString, isAllowedUrlFieldValue, isUnsafeStoredString, safeImageUrl, safeLinkUrl } from './safeUrl';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 const PDF = 'data:application/pdf;base64,JVBERi0=';
@@ -46,4 +48,21 @@ test('findUnsafeString reports the path of the offending value', () => {
 
 test('the seed content passes the storage rules', () => {
   assert.equal(findUnsafeString(buildSeedState()), null);
+});
+
+test('HTML-entity-encoded script URLs stay inert: React writes them as literal text and the render helpers drop them', () => {
+  const encoded = ['&#106;avascript:alert(1)', '&#x6A;avascript:alert(1)', 'java&#x09;script:alert(1)', 'javascript&colon;alert(1)'];
+  for (const value of encoded) {
+    // React escapes "&" in attribute values, so the browser never decodes the entity into a
+    // "javascript:" scheme: the attribute holds the literal characters, a harmless relative URL.
+    const html = renderToStaticMarkup(createElement('a', { href: value }, 'x'));
+    assert.equal(html, `<a href="${value.replace(/&/g, '&amp;')}">x</a>`);
+    assert.equal(/href="\s*javascript:/i.test(html), false, value);
+    // Links and images are rendered through these helpers, which only pass known schemes and site paths.
+    assert.equal(safeLinkUrl(value), '', value);
+    assert.equal(safeImageUrl(value), '', value);
+  }
+  // The decoded form, which is what a browser would act on, is refused when stored.
+  assert.equal(isUnsafeStoredString('javascript:alert(1)'), true);
+  assert.equal(isAllowedUrlFieldValue('websiteUrl', 'javascript:alert(1)'), false);
 });
