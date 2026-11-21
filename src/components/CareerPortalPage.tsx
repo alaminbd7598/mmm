@@ -44,6 +44,7 @@ import {
   validateCareerApplication,
 } from '../utils/careerAndMapsLogic';
 import { MIN_PASSWORD_LENGTH } from '../server/contracts';
+import { toBengaliDigits } from '../utils/cmsLogic';
 
 interface CareerPortalPageProps {
   onNavigateContact: () => void;
@@ -228,7 +229,7 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
       case 'CONFLICT':
         return 'এই ইমেইল দিয়ে ইতিপূর্বেই অ্যাকাউন্ট তৈরি করা হয়েছে। অনুগ্রহ করে লগইন করুন।';
       case 'TOO_SHORT':
-        return `পাসওয়ার্ড কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষরের হতে হবে।`;
+        return `পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`;
       case 'NEEDS_LETTER_AND_DIGIT':
         return 'পাসওয়ার্ডে অক্ষর ও সংখ্যা উভয়ই থাকতে হবে।';
       case 'TOO_COMMON':

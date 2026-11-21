@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, KeyRound, Loader2, Lock, LogOut, X } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
 import { MIN_PASSWORD_LENGTH } from '../server/contracts';
+import { toBengaliDigits } from '../utils/cmsLogic';
 
 interface ChangePasswordDialogProps {
   isOpen: boolean;
@@ -19,7 +20,6 @@ interface ChangePasswordDialogProps {
 const inputClass =
   'w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-2.5 pl-10 pr-10 font-mono text-sm text-slate-900 dark:text-white outline-none focus:border-[#005a6e] focus:ring-2 focus:ring-[#005a6e]/20';
 
-const toBengaliNumber = (n: number): string => String(n).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[Number(d)]);
 
 export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
   isOpen,
@@ -107,7 +107,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
     if (newPassword.length < MIN_PASSWORD_LENGTH) {
       setError(
         tr(
-          `নতুন পাসওয়ার্ড কমপক্ষে ${toBengaliNumber(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`,
+          `নতুন পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`,
           `The new password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
           `يجب ألا تقل كلمة المرور الجديدة عن ${MIN_PASSWORD_LENGTH} أحرف.`
         )
@@ -261,7 +261,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
           <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500 dark:text-slate-400">
             <span id="change-password-hint">
               {tr(
-                `পাসওয়ার্ড কমপক্ষে ${toBengaliNumber(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
+                `পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
                 `At least ${MIN_PASSWORD_LENGTH} characters, with letters and digits.`,
                 `${MIN_PASSWORD_LENGTH} أحرف على الأقل، تتضمن أحرفاً وأرقاماً.`
               )}

@@ -26,7 +26,7 @@ const MAX_EMBEDDED_STATE_CHARS = 1_500_000;
 
 let embeddedCache: { version: number; state: Partial<CMSState> | null } | null = null;
 
-/** The public projection for the first paint, or null when the store is unavailable or too large. */
+/** The public projection for the first paint, or null when it is too large or was never loaded. */
 async function initialPublicState(): Promise<Partial<CMSState> | null> {
   try {
     const snapshot = await (await getStore()).getSnapshot();
@@ -39,8 +39,9 @@ async function initialPublicState(): Promise<Partial<CMSState> | null> {
     }
     return embeddedCache.state;
   } catch {
-    // The browser falls back to its cached copy / built-in content and keeps retrying.
-    return null;
+    // Database outage: serve the last content this process rendered; without one the browser
+    // falls back to its cached copy / built-in content. Either way it keeps retrying.
+    return embeddedCache?.state ?? null;
   }
 }
 

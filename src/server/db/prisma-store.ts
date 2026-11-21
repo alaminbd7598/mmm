@@ -52,6 +52,10 @@ function isConnectionFailure(err: unknown): boolean {
   );
 }
 
+/** After a connection failure, requests are refused at once for this long instead of each waiting for the pool. */
+const OUTAGE_COOLDOWN_MS = 5_000;
+const UNREACHABLE_MESSAGE = 'Database is unreachable.';
+
 /** Translate driver errors into store errors without exposing SQL or data. */
 function translateError(err: unknown): unknown {
   const code = knownCode(err);
@@ -63,7 +67,7 @@ function translateError(err: unknown): unknown {
     return new StoreUnavailableError('Database schema is missing or outdated. Run `npm run db:push`.');
   }
   if ((code && UNAVAILABLE_CODES.has(code)) || isConnectionFailure(err)) {
-    return new StoreUnavailableError('Database is unreachable.');
+    return new StoreUnavailableError(UNREACHABLE_MESSAGE);
   }
   return err;
 }
@@ -103,23 +107,40 @@ export class PrismaStore implements DataStore {
   private passwordPending = false;
 
   init(): Promise<void> {
-    this.initPromise ??= this.ensureSeeded()
+    this.initPromise ??= this.guarded(() => this.ensureSeeded())
       .then(async () => {
         this.passwordPending = (await this.bootstrap?.(this)) ?? false;
       })
       .catch((err) => {
         this.initPromise = null;
-        throw translateError(err);
+        throw this.failure(err);
       });
     return this.initPromise;
   }
 
-  /** Runs a query, translating driver failures into store errors. */
+  /** While in the future, the database was just found unreachable and requests fail immediately. */
+  private unreachableUntil = 0;
+
+  private assertReachable(): void {
+    if (Date.now() < this.unreachableUntil) throw new StoreUnavailableError(UNREACHABLE_MESSAGE);
+  }
+
+  /** Translates a driver failure; a connection failure also starts the fail-fast window. */
+  private failure(err: unknown): unknown {
+    const translated = translateError(err);
+    if (translated instanceof StoreUnavailableError && translated.message === UNREACHABLE_MESSAGE) {
+      this.unreachableUntil = Date.now() + OUTAGE_COOLDOWN_MS;
+    }
+    return translated;
+  }
+
+  /** Runs database work, translating driver failures into store errors. */
   private async guarded<T>(run: () => Promise<T>): Promise<T> {
+    this.assertReachable();
     try {
       return await run();
     } catch (err) {
-      throw translateError(err);
+      throw this.failure(err);
     }
   }
 
@@ -182,13 +203,14 @@ export class PrismaStore implements DataStore {
       this.cached = deepFreeze(snapshot);
       return snapshot;
     } catch (err) {
-      throw translateError(err);
+      throw this.failure(err);
     }
   }
 
   async applyOps(ops: SyncOp[], opts: ApplyOpsOptions = {}): Promise<ApplyOpsResult> {
     await this.init();
     if (!ops.length) return this.getVersion();
+    this.assertReachable();
     try {
       return await this.db.$transaction(async (tx) => {
         // Bumping first takes the SiteMeta row lock, serialising writers (no deadlocks, stable positions).
@@ -201,7 +223,7 @@ export class PrismaStore implements DataStore {
         };
       }, TX_OPTIONS);
     } catch (err) {
-      throw translateError(err);
+      throw this.failure(err);
     }
   }
 

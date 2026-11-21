@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { generateAdmissionPDF } from '../utils/pdfExport';
 import { exportRegistrationsToCSV } from '../utils/exportUtils';
+import { validateNewPassword } from '../utils/passwordPolicy';
 import { useCMS } from '../store/useCMSStore';
 import { MIN_PASSWORD_LENGTH } from '../server/contracts';
 import {
@@ -71,6 +72,7 @@ import {
   AdminTabId,
   canAccessAdminResource,
   hasRolePermission,
+  toBengaliDigits,
 } from '../utils/cmsLogic';
 import { localizeDynamicText } from '../utils/textLocalizer';
 import { EnrollmentTrendsChart } from './EnrollmentTrendsChart';
@@ -486,18 +488,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     // Same rules the server applies, checked here so a refused account is never shown as created.
     const username = newUsername.trim();
     const password = newUserPassword;
-    const problem =
-      state.users.some((u) => u.username.toLowerCase() === username.toLowerCase())
-        ? tr('এই ইউজার আইডি ইতিমধ্যে ব্যবহৃত হচ্ছে।', 'This User ID is already in use.', 'اسم المستخدم هذا مستخدم بالفعل.')
-        : password.length < MIN_PASSWORD_LENGTH || !/\p{L}/u.test(password) || !/\p{N}/u.test(password)
-          ? tr(
-              `পাসওয়ার্ড কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
-              `The password must be at least ${MIN_PASSWORD_LENGTH} characters long and contain both letters and digits.`,
-              `يجب ألا تقل كلمة المرور عن ${MIN_PASSWORD_LENGTH} أحرف وأن تحتوي على أحرف وأرقام.`
-            )
-          : username.length >= 4 && password.toLowerCase().includes(username.toLowerCase())
-            ? tr('পাসওয়ার্ডের ভেতরে ইউজার আইডি থাকতে পারবে না।', 'The password must not contain the User ID.', 'يجب ألا تحتوي كلمة المرور على اسم المستخدم.')
-            : '';
+    const policy = validateNewPassword(password, username);
+    const problem = state.users.some((u) => u.username.toLowerCase() === username.toLowerCase())
+      ? tr('এই ইউজার আইডি ইতিমধ্যে ব্যবহৃত হচ্ছে।', 'This User ID is already in use.', 'اسم المستخدم هذا مستخدم بالفعل.')
+      : policy.ok
+        ? ''
+        : policy.code === 'SAME_AS_USERNAME' || policy.code === 'CONTAINS_USERNAME'
+          ? tr('পাসওয়ার্ডের ভেতরে ইউজার আইডি থাকতে পারবে না।', 'The password must not contain the User ID.', 'يجب ألا تحتوي كلمة المرور على اسم المستخدم.')
+          : policy.code === 'TOO_COMMON'
+            ? tr(
+                'এই পাসওয়ার্ডটি খুব সহজ বা বহুল ব্যবহৃত। অনুগ্রহ করে অন্য একটি পাসওয়ার্ড দিন।',
+                'This password is too common. Please choose a different one.',
+                'كلمة المرور هذه شائعة جداً. يرجى اختيار كلمة أخرى.'
+              )
+            : policy.code === 'TOO_LONG'
+              ? tr(
+                  'পাসওয়ার্ডটি খুব দীর্ঘ; অনুগ্রহ করে আরও ছোট পাসওয়ার্ড দিন।',
+                  'The password is too long; please choose a shorter one.',
+                  'كلمة المرور طويلة جداً؛ يرجى اختيار كلمة أقصر.'
+                )
+              : tr(
+                  `পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
+                  `The password must be at least ${MIN_PASSWORD_LENGTH} characters long and contain both letters and digits.`,
+                  `يجب ألا تقل كلمة المرور عن ${MIN_PASSWORD_LENGTH} أحرف وأن تحتوي على أحرف وأرقام.`
+                );
     setNewUserError(problem);
     if (problem) return;
     addAdminUser({
@@ -3831,7 +3845,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
                         </div>
                         <p id="new-user-password-hint" className="text-[11px] text-slate-500 dark:text-slate-400">
                           {tr(
-                            `কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষর; বর্ণ ও সংখ্যা দুটোই থাকতে হবে। প্রথমবার লগইনের পর ব্যবহারকারীকে নিজের পাসওয়ার্ড বদলাতে হবে।`,
+                            `কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষর; বর্ণ ও সংখ্যা দুটোই থাকতে হবে। প্রথমবার লগইনের পর ব্যবহারকারীকে নিজের পাসওয়ার্ড বদলাতে হবে।`,
                             `At least ${MIN_PASSWORD_LENGTH} characters with letters and digits. The user must choose their own password at first sign-in.`,
                             `${MIN_PASSWORD_LENGTH} أحرف على الأقل تتضمن أحرفاً وأرقاماً. يجب على المستخدم تغييرها عند أول تسجيل دخول.`
                           )}

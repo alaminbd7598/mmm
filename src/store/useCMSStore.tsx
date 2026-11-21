@@ -75,6 +75,7 @@ import {
   normalizeAdminRole,
   parseBulkLeadsCsvText,
   resolveCourseTitle,
+  toBengaliDigits,
 } from '../utils/cmsLogic';
 import {
   AppLanguage,
@@ -618,7 +619,7 @@ export const CMSProvider: React.FC<{
         return tr('বর্তমান পাসওয়ার্ডটি সঠিক নয়।', 'The current password is incorrect.', 'كلمة المرور الحالية غير صحيحة.');
       case 'TOO_SHORT':
         return tr(
-          `নতুন পাসওয়ার্ড কমপক্ষে ${String(MIN_PASSWORD_LENGTH).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[Number(d)])} অক্ষরের হতে হবে।`,
+          `নতুন পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`,
           `The new password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
           `يجب ألا تقل كلمة المرور الجديدة عن ${MIN_PASSWORD_LENGTH} أحرف.`
         );

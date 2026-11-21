@@ -11,6 +11,8 @@ export interface ApiFailure {
   code: string;
   /** Server-provided English message, for logs/fallbacks only; UI shows localized text by code. */
   error: string;
+  /** The server's JSON answer, when it sent one (e.g. per-op rejection reasons of a refused sync). */
+  body?: Record<string, unknown>;
 }
 
 export type ApiResult<T> = ({ ok: true; status: number } & { data: T }) | ApiFailure;
@@ -60,11 +62,14 @@ export async function apiRequest<T>(path: string, opts: ApiRequestOptions = {}):
 
   const record = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
   if (!res.ok || record.ok === false) {
-    return failure(
-      res.status,
-      typeof record.code === 'string' ? record.code : res.ok ? 'FAILED' : `HTTP_${res.status}`,
-      typeof record.error === 'string' ? record.error : `Request failed with status ${res.status}.`
-    );
+    return {
+      ...failure(
+        res.status,
+        typeof record.code === 'string' ? record.code : res.ok ? 'FAILED' : `HTTP_${res.status}`,
+        typeof record.error === 'string' ? record.error : `Request failed with status ${res.status}.`
+      ),
+      body: record,
+    };
   }
   return { ok: true, status: res.status, data: payload as T };
 }

@@ -25,9 +25,11 @@ import {
   type StateKey,
   type StateResponse,
   type SyncOp,
+  type SyncResponse,
 } from '../../server/contracts';
 import { MAX_SYNC_REQUEST_BYTES, fetchState, fetchStateMeta, postAdminSync, postPublicSubmit } from '../../lib/api/state';
 import { chunkOps, computeOps, deepEqual, fullReplaceOps } from './diff';
+import { describeSyncRejection } from './rejection';
 import { buildClientFallbackState, stripConfirmedSecrets, stripSecrets } from './state-shape';
 
 export type ClientStorageMode = 'database' | 'demo' | 'offline';
@@ -287,10 +289,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
       );
       return;
     }
-    const detail =
-      reason === 'TOO_LARGE'
-        ? t('ফাইল বা তথ্যের আকার অনেক বড়।', 'The file or data is too large.', 'حجم الملف أو البيانات كبير جداً.')
-        : reason || '';
+    const detail = describeSyncRejection(reason, t);
     n(
       t('কিছু পরিবর্তন সংরক্ষণ করা যায়নি', 'Some Changes Were Not Saved', 'تعذر حفظ بعض التغييرات'),
       t(
@@ -340,7 +339,11 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
           await refetchRef.current();
           return 'rejected';
         }
-        notifyRejected(res.code === 'TOO_LARGE' ? 'TOO_LARGE' : undefined);
+        // A sync in which every op was refused answers 400 with the per-op reasons.
+        const refused = (res.body as Partial<SyncResponse> | undefined)?.rejected;
+        notifyRejected(
+          res.code === 'TOO_LARGE' || res.code === 'RATE_LIMITED' ? res.code : refused?.[0]?.reason
+        );
         await refetchRef.current();
         return 'rejected';
       }
