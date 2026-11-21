@@ -9,6 +9,7 @@ import { isValidEmail, isValidPhone, toAsciiDigits } from '../../utils/contactVa
 import { findUnsafeString, isAllowedUrlFieldValue } from '../../utils/safeUrl';
 import {
   COLLECTION_KEYS,
+  MAX_PHOTO_BYTES,
   PUBLIC_CREATE_KEYS,
   SINGLETON_KEYS,
   type PublicCreateKey,
@@ -21,7 +22,7 @@ export const MAX_SYNC_OPS = 2000;
 export const MAX_COLLECTION_ITEMS = 20_000;
 export const MAX_PUBLIC_ITEMS = 10;
 
-export const MAX_PHOTO_BYTES = Math.floor(1.5 * 1024 * 1024);
+export { MAX_PHOTO_BYTES };
 export const MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 const MAX_URL_LENGTH = 2048;
 

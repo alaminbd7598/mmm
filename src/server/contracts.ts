@@ -156,6 +156,12 @@ export const PUBLIC_CREATE_KEYS = ['leads', 'emails', 'complaints', 'careerAppli
 export type PublicCreateKey = (typeof PUBLIC_CREATE_KEYS)[number];
 
 /**
+ * Largest student photo (decoded bytes) the server stores. The admission form shrinks pictures
+ * well below it and refuses, before sending, one it cannot bring under it (src/utils/imageResize.ts).
+ */
+export const MAX_PHOTO_BYTES = Math.floor(1.5 * 1024 * 1024);
+
+/**
  * Keys that are never sent to anonymous visitors (personal data, staff data, secrets).
  * `users` is replaced by a signatory-only projection; see PublicSignatory.
  */

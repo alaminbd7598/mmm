@@ -27,7 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { photoFileToDataUrl } from '../utils/imageResize';
+import { PhotoTooLargeError, photoFileToDataUrl } from '../utils/imageResize';
 import { AdmissionLead, DetailedAdmissionData } from '../types/cms';
 import { findMatchingLeadByPhone, normalizePhoneNumber } from '../utils/cmsLogic';
 
@@ -82,7 +82,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   initialCategory,
   inlineMode = false,
 }) => {
-  const { state, submitInquiry, language } = useCMS();
+  const { state, submitInquiry, language, publicSubmitError } = useCMS();
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
   const [step, setStep] = useState<number>(1);
@@ -91,6 +91,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [photoFileName, setPhotoFileName] = useState<string>('No file chosen');
+  const [photoError, setPhotoError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [studentEmail, setStudentEmail] = useState('applicant@maharatmadrasah.com');
@@ -209,13 +210,23 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
-    setPhotoFileName(file.name);
+    setPhotoError('');
     // Large camera pictures are scaled down so the application is not refused for its size.
     void photoFileToDataUrl(file).then(
-      (dataUrl) => updateDetail('studentPhotoUrl', dataUrl),
-      () => undefined
+      (dataUrl) => {
+        setPhotoFileName(file.name);
+        updateDetail('studentPhotoUrl', dataUrl);
+      },
+      (err: unknown) => {
+        // A picture that is still above the server's limit is refused here, with the same
+        // message the server's refusal would produce, instead of failing at submission.
+        if (err instanceof PhotoTooLargeError) setPhotoError(publicSubmitError({ status: 413, code: 'TOO_LARGE' }));
+        // Let the visitor pick the same file again after shrinking it.
+        input.value = '';
+      }
     );
   };
 
@@ -1005,6 +1016,11 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
                           {photoFileName}
                         </span>
                       </div>
+                      {photoError && (
+                        <p role="alert" data-testid="admission-photo-error" className="w-full text-left text-xs font-semibold text-rose-600 dark:text-rose-400">
+                          {photoError}
+                        </p>
+                      )}
 
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         অনুমোদিত ফরম্যাট: JPG, PNG (সর্বোচ্চ ২MB)
