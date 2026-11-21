@@ -68,10 +68,16 @@ export function requestOrigin(headers: { get(name: string): string | null }): st
   return `${proto}://${host}`;
 }
 
+/** Browser-tab title of a public page path (also used by the client on in-app navigation). */
+export function titleForPath(path: string): string {
+  const page = PUBLIC_PAGES[path];
+  return page && path !== '/' ? `${page.bn} | ${SITE_NAME}` : DEFAULT_TITLE;
+}
+
 export function metadataForPath(path: string): Metadata {
   const page = PUBLIC_PAGES[path];
   const isAdmin = path === '/admin' || path.startsWith('/admin/');
-  const title = page && path !== '/' ? `${page.bn} | ${SITE_NAME}` : DEFAULT_TITLE;
+  const title = titleForPath(path);
   return {
     title,
     alternates: page ? { canonical: path } : undefined,

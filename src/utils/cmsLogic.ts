@@ -27,6 +27,7 @@ import {
 } from '../types/cms';
 import { resolveVersionManagerConfig } from './versionLogic';
 import { isAllowedEmbedUrl, isSafeMediaUrl } from './safeUrl';
+import { isValidEmail, isValidPhone } from './contactValidation';
 
 export type AdminTabId =
   | 'overview'
@@ -1651,7 +1652,7 @@ export function validateInquiryInput(
       ),
     };
   }
-  if (!input.phone || input.phone.trim().length < 6) {
+  if (!input.phone || !isValidPhone(input.phone)) {
     return {
       valid: false,
       error: tr(
@@ -1661,7 +1662,7 @@ export function validateInquiryInput(
       ),
     };
   }
-  if (!input.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) {
+  if (!input.email || !isValidEmail(input.email.trim())) {
     return {
       valid: false,
       error: tr(
@@ -2514,13 +2515,27 @@ export function enableAllPublicSections(settings: SiteSettings): SiteSettings {
  * Deeply merges a partial or full CMSState (from the public cache, GET /api/state, or a JSON backup)
  * with fallbackState so all 5 roles, RBAC permissions, stored logos, and infographics are preserved.
  */
+export interface MergeCMSStateOptions {
+  /**
+   * True when `rawCandidate` is the stored state itself (a server response): its lists are used
+   * exactly as they are, even when empty or shorter than the built-in defaults. False (default)
+   * for seed content and imported backups, where an empty or missing list means "use the default".
+   */
+  authoritative?: boolean;
+}
+
 export function mergeLiveCMSState(
   rawCandidate: Record<string, unknown> | Partial<CMSState> | null | undefined,
-  fallbackState: CMSState
+  fallbackState: CMSState,
+  options: MergeCMSStateOptions = {}
 ): CMSState {
   if (!rawCandidate || typeof rawCandidate !== 'object') {
     return fallbackState;
   }
+  const authoritative = options.authoritative === true;
+  /** The incoming list, unless it is missing (or, for non-authoritative sources, empty). */
+  const list = <T, F extends T[] | undefined>(incoming: T[] | null | undefined, fallback: F): T[] | F =>
+    Array.isArray(incoming) && (authoritative || incoming.length > 0) ? incoming : fallback;
   const parsed = rawCandidate as Partial<CMSState> & Record<string, unknown>;
   const incomingSettings =
     parsed.settings && typeof parsed.settings === 'object'
@@ -2545,19 +2560,13 @@ export function mergeLiveCMSState(
   };
 
   const rawDeptVideos =
-    Array.isArray(parsed.departmentVideos) && parsed.departmentVideos.length
-      ? parsed.departmentVideos
-      : fallbackState.departmentVideos;
+    list(parsed.departmentVideos, fallbackState.departmentVideos);
 
   const rawActivityVideos =
-    Array.isArray(parsed.activityVideos) && parsed.activityVideos.length
-      ? parsed.activityVideos
-      : fallbackState.activityVideos;
+    list(parsed.activityVideos, fallbackState.activityVideos);
 
   const rawGuardianReels =
-    Array.isArray(parsed.guardianReels) && parsed.guardianReels.length
-      ? parsed.guardianReels
-      : fallbackState.guardianReels;
+    list(parsed.guardianReels, fallbackState.guardianReels);
 
   return {
     ...fallbackState,
@@ -2567,10 +2576,7 @@ export function mergeLiveCMSState(
       ...incomingSettings,
       heroVideoUrl: sanitizeVideoUrl(incomingSettings.heroVideoUrl ?? fallbackState.settings.heroVideoUrl),
       storedLogos: mergedLogos,
-      externalPortals:
-        Array.isArray(incomingSettings.externalPortals) && incomingSettings.externalPortals.length > 0
-          ? incomingSettings.externalPortals
-          : fallbackState.settings.externalPortals,
+      externalPortals: list(incomingSettings.externalPortals, fallbackState.settings.externalPortals),
       seoConfig: {
         ...DEFAULT_SEO_META_CONFIG,
         ...(fallbackState.settings.seoConfig || {}),
@@ -2588,26 +2594,18 @@ export function mergeLiveCMSState(
     aiBotConfig: {
       ...fallbackState.aiBotConfig,
       ...(parsed.aiBotConfig || {}),
-      suggestedQuestions: parsed.aiBotConfig?.suggestedQuestions?.length
-        ? parsed.aiBotConfig.suggestedQuestions
-        : fallbackState.aiBotConfig.suggestedQuestions,
-      qaItems: parsed.aiBotConfig?.qaItems?.length
-        ? parsed.aiBotConfig.qaItems
-        : fallbackState.aiBotConfig.qaItems,
+      suggestedQuestions: list(parsed.aiBotConfig?.suggestedQuestions, fallbackState.aiBotConfig.suggestedQuestions),
+      qaItems: list(parsed.aiBotConfig?.qaItems, fallbackState.aiBotConfig.qaItems),
     },
     whatsappConfig: {
       ...fallbackState.whatsappConfig,
       ...(parsed.whatsappConfig || {}),
-      quickTopics: parsed.whatsappConfig?.quickTopics?.length
-        ? parsed.whatsappConfig.quickTopics
-        : fallbackState.whatsappConfig.quickTopics,
+      quickTopics: list(parsed.whatsappConfig?.quickTopics, fallbackState.whatsappConfig.quickTopics),
     },
     feeCalculatorConfig: {
       ...fallbackState.feeCalculatorConfig,
       ...(parsed.feeCalculatorConfig || {}),
-      items: parsed.feeCalculatorConfig?.items?.length
-        ? parsed.feeCalculatorConfig.items
-        : fallbackState.feeCalculatorConfig.items,
+      items: list(parsed.feeCalculatorConfig?.items, fallbackState.feeCalculatorConfig.items),
     },
     campusVideo: {
       ...mergedCampusVideo,
@@ -2641,6 +2639,7 @@ export function mergeLiveCMSState(
           role: normalizeAdminRole(u.role),
         })
       );
+      if (authoritative && Array.isArray(parsed.users)) return existing;
       const merged = [...existing];
       for (const seedUser of fallbackState.users) {
         if (!merged.some((u) => u.username === seedUser.username || u.role === seedUser.role)) {
@@ -2671,41 +2670,25 @@ export function mergeLiveCMSState(
         ...(parsedRbac['Content Managers'] || parsedRbac['Content Manager'] || {}),
       },
     } as RolePermissionMatrix,
-    leaveRequests: Array.isArray(parsed.leaveRequests) && parsed.leaveRequests.length
-      ? parsed.leaveRequests
-      : fallbackState.leaveRequests,
-    emails: Array.isArray(parsed.emails) && parsed.emails.length
-      ? parsed.emails
-      : fallbackState.emails,
+    leaveRequests: list(parsed.leaveRequests, fallbackState.leaveRequests),
+    emails: list(parsed.emails, fallbackState.emails),
     educationMethodConfig: {
       ...fallbackState.educationMethodConfig,
       ...(parsed.educationMethodConfig || {}),
-      stages: parsed.educationMethodConfig?.stages?.length
-        ? parsed.educationMethodConfig.stages
-        : fallbackState.educationMethodConfig.stages,
+      stages: list(parsed.educationMethodConfig?.stages, fallbackState.educationMethodConfig.stages),
     },
     tenYearPlanConfig: {
       ...fallbackState.tenYearPlanConfig,
       ...(parsed.tenYearPlanConfig || {}),
-      stageBanners: parsed.tenYearPlanConfig?.stageBanners?.length
-        ? parsed.tenYearPlanConfig.stageBanners
-        : fallbackState.tenYearPlanConfig.stageBanners,
-      classColumns: parsed.tenYearPlanConfig?.classColumns?.length
-        ? parsed.tenYearPlanConfig.classColumns
-        : fallbackState.tenYearPlanConfig.classColumns,
-      tracks: parsed.tenYearPlanConfig?.tracks?.length
-        ? parsed.tenYearPlanConfig.tracks
-        : fallbackState.tenYearPlanConfig.tracks,
+      stageBanners: list(parsed.tenYearPlanConfig?.stageBanners, fallbackState.tenYearPlanConfig.stageBanners),
+      classColumns: list(parsed.tenYearPlanConfig?.classColumns, fallbackState.tenYearPlanConfig.classColumns),
+      tracks: list(parsed.tenYearPlanConfig?.tracks, fallbackState.tenYearPlanConfig.tracks),
     },
     dayCareRoutineConfig: {
       ...fallbackState.dayCareRoutineConfig,
       ...(parsed.dayCareRoutineConfig || {}),
-      periods: parsed.dayCareRoutineConfig?.periods?.length
-        ? parsed.dayCareRoutineConfig.periods
-        : fallbackState.dayCareRoutineConfig.periods,
-      durationBars: parsed.dayCareRoutineConfig?.durationBars?.length
-        ? parsed.dayCareRoutineConfig.durationBars
-        : fallbackState.dayCareRoutineConfig.durationBars,
+      periods: list(parsed.dayCareRoutineConfig?.periods, fallbackState.dayCareRoutineConfig.periods),
+      durationBars: list(parsed.dayCareRoutineConfig?.durationBars, fallbackState.dayCareRoutineConfig.durationBars),
     },
     transportConfig: {
       ...fallbackState.transportConfig,
@@ -2715,25 +2698,15 @@ export function mergeLiveCMSState(
         parsed.transportConfig.vehicleImageUrl.endsWith('/transport_van.png')
           ? '/assets/maharat/transport-van.png'
           : parsed.transportConfig?.vehicleImageUrl || fallbackState.transportConfig.vehicleImageUrl,
-      routes: parsed.transportConfig?.routes?.length
-        ? parsed.transportConfig.routes
-        : fallbackState.transportConfig.routes,
-      landmarks: parsed.transportConfig?.landmarks?.length
-        ? parsed.transportConfig.landmarks
-        : fallbackState.transportConfig.landmarks,
+      routes: list(parsed.transportConfig?.routes, fallbackState.transportConfig.routes),
+      landmarks: list(parsed.transportConfig?.landmarks, fallbackState.transportConfig.landmarks),
     },
     admissionExtraConfig: {
       ...fallbackState.admissionExtraConfig,
       ...(parsed.admissionExtraConfig || {}),
-      feeComparisonRows: parsed.admissionExtraConfig?.feeComparisonRows?.length
-        ? parsed.admissionExtraConfig.feeComparisonRows
-        : fallbackState.admissionExtraConfig.feeComparisonRows,
-      ageEligibilityList: parsed.admissionExtraConfig?.ageEligibilityList?.length
-        ? parsed.admissionExtraConfig.ageEligibilityList
-        : fallbackState.admissionExtraConfig.ageEligibilityList,
-      requiredDocumentsBn: parsed.admissionExtraConfig?.requiredDocumentsBn?.length
-        ? parsed.admissionExtraConfig.requiredDocumentsBn
-        : fallbackState.admissionExtraConfig.requiredDocumentsBn,
+      feeComparisonRows: list(parsed.admissionExtraConfig?.feeComparisonRows, fallbackState.admissionExtraConfig.feeComparisonRows),
+      ageEligibilityList: list(parsed.admissionExtraConfig?.ageEligibilityList, fallbackState.admissionExtraConfig.ageEligibilityList),
+      requiredDocumentsBn: list(parsed.admissionExtraConfig?.requiredDocumentsBn, fallbackState.admissionExtraConfig.requiredDocumentsBn),
     },
     uniformConfig: {
       ...fallbackState.uniformConfig,
@@ -2746,45 +2719,35 @@ export function mergeLiveCMSState(
     hifzTreeConfig: {
       ...fallbackState.hifzTreeConfig,
       ...(parsed.hifzTreeConfig || {}),
-      totalHuffazCount: Math.max(
-        Number(parsed.hifzTreeConfig?.totalHuffazCount || 0),
-        fallbackState.hifzTreeConfig.totalHuffazCount
-      ),
+      // Stored data is authoritative: a graduate removed in the admin panel stays removed. Only
+      // old backups / seed content (non-authoritative) are topped up from the built-in list.
+      totalHuffazCount:
+        authoritative && Number.isFinite(Number(parsed.hifzTreeConfig?.totalHuffazCount))
+          ? Number(parsed.hifzTreeConfig?.totalHuffazCount)
+          : Math.max(Number(parsed.hifzTreeConfig?.totalHuffazCount || 0), fallbackState.hifzTreeConfig.totalHuffazCount),
       graduates:
         Array.isArray(parsed.hifzTreeConfig?.graduates) &&
-        parsed.hifzTreeConfig.graduates.length >= fallbackState.hifzTreeConfig.graduates.length
+        (authoritative || parsed.hifzTreeConfig.graduates.length >= fallbackState.hifzTreeConfig.graduates.length)
           ? parsed.hifzTreeConfig.graduates
           : fallbackState.hifzTreeConfig.graduates,
     },
     photoGallery:
-      Array.isArray(parsed.photoGallery) && parsed.photoGallery.length
-        ? parsed.photoGallery
-        : fallbackState.photoGallery,
-    complaints: Array.isArray(parsed.complaints) && parsed.complaints.length
-      ? parsed.complaints
-      : fallbackState.complaints,
+      list(parsed.photoGallery, fallbackState.photoGallery),
+    complaints: list(parsed.complaints, fallbackState.complaints),
     versionManager: resolveVersionManagerConfig(
       parsed.versionManager ?? fallbackState.versionManager
     ),
     careerJobs:
-      Array.isArray(parsed.careerJobs) && parsed.careerJobs.length
-        ? parsed.careerJobs
-        : fallbackState.careerJobs || [],
+      list(parsed.careerJobs, fallbackState.careerJobs || []),
     careerApplications:
-      Array.isArray(parsed.careerApplications) && parsed.careerApplications.length
-        ? parsed.careerApplications
-        : fallbackState.careerApplications || [],
+      list(parsed.careerApplications, fallbackState.careerApplications || []),
     careerCandidates: Array.isArray(parsed.careerCandidates)
       ? parsed.careerCandidates
       : fallbackState.careerCandidates || [],
     admissionTokens2027:
-      Array.isArray(parsed.admissionTokens2027) && parsed.admissionTokens2027.length
-        ? parsed.admissionTokens2027
-        : fallbackState.admissionTokens2027 || [],
+      list(parsed.admissionTokens2027, fallbackState.admissionTokens2027 || []),
     blogPosts:
-      Array.isArray(parsed.blogPosts) && parsed.blogPosts.length
-        ? parsed.blogPosts
-        : fallbackState.blogPosts || [],
+      list(parsed.blogPosts, fallbackState.blogPosts || []),
     blogAutomationConfig: {
       ...(fallbackState.blogAutomationConfig || {
         enabled: true,
@@ -2795,27 +2758,24 @@ export function mergeLiveCMSState(
       ...(parsed.blogAutomationConfig || {}),
     },
     calendarEvents:
-      Array.isArray(parsed.calendarEvents) && parsed.calendarEvents.length
-        ? parsed.calendarEvents
-        : fallbackState.calendarEvents || [],
-    mobileBottomBar: parsed.mobileBottomBar?.slots?.length
-      ? parsed.mobileBottomBar
-      : fallbackState.mobileBottomBar,
+      list(parsed.calendarEvents, fallbackState.calendarEvents || []),
+    mobileBottomBar:
+      parsed.mobileBottomBar && Array.isArray(parsed.mobileBottomBar.slots) && (authoritative || parsed.mobileBottomBar.slots.length > 0)
+        ? parsed.mobileBottomBar
+        : fallbackState.mobileBottomBar,
     virtualOfficeConfig: parsed.virtualOfficeConfig
       ? {
           ...(fallbackState.virtualOfficeConfig || parsed.virtualOfficeConfig),
           ...parsed.virtualOfficeConfig,
           desks:
-            Array.isArray(parsed.virtualOfficeConfig.desks) &&
-            parsed.virtualOfficeConfig.desks.length
+            // The desk list always falls back to the defaults when empty (the server does the same).
+            Array.isArray(parsed.virtualOfficeConfig.desks) && parsed.virtualOfficeConfig.desks.length
               ? parsed.virtualOfficeConfig.desks
               : fallbackState.virtualOfficeConfig?.desks || [],
         }
       : fallbackState.virtualOfficeConfig,
     virtualOfficeSessions:
-      Array.isArray(parsed.virtualOfficeSessions) && parsed.virtualOfficeSessions.length
-        ? parsed.virtualOfficeSessions
-        : fallbackState.virtualOfficeSessions || [],
+      list(parsed.virtualOfficeSessions, fallbackState.virtualOfficeSessions || []),
   };
 }
 

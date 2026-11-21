@@ -49,7 +49,7 @@ export const AdminCareerTab: React.FC = () => {
   const [titleEn, setTitleEn] = useState('');
   const [departmentBn, setDepartmentBn] = useState('জেনারেল সেকশন (প্লে – দাখিল)');
   const [campusBn, setCampusBn] = useState('বয়েজ ও গার্লস ক্যাম্পাস (সেক্টর-১২, উত্তরা)');
-  const [employmentTypeBn, setEmploymentTypeBn] = useState('পূর্ণকালীন');
+  const [employmentTypeBn] = useState('পূর্ণকালীন');
   const [salaryRangeBn, setSalaryRangeBn] = useState('৳ ১৮,০০০ – ২৮,০০০/-');
   const [vacancies, setVacancies] = useState(2);
   const [deadline, setDeadline] = useState('2026-12-31');

@@ -116,6 +116,7 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
   const [appCoverLetter, setAppCoverLetter] = useState('');
   const [appError, setAppError] = useState('');
   const [appSuccessId, setAppSuccessId] = useState<string | null>(null);
+  const [isSubmittingApp, setIsSubmittingApp] = useState(false);
 
   const openApplyModal = (job: { id: string; titleBn: string; applicationFeeBDT?: number }) => {
     setViewingJob(null);
@@ -160,9 +161,9 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
     reader.readAsDataURL(file);
   };
 
-  const handleApplicationSubmit = (e: React.FormEvent) => {
+  const handleApplicationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!applyingJob) return;
+    if (!applyingJob || isSubmittingApp) return;
 
     const validation = validateCareerApplication(
       {
@@ -185,7 +186,8 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
       return;
     }
 
-    const created = submitCareerApplication({
+    setIsSubmittingApp(true);
+    const result = await submitCareerApplication({
       jobId: applyingJob.id,
       jobTitleBn: applyingJob.titleBn,
       applicantName: appName.trim(),
@@ -204,6 +206,13 @@ export const CareerPortalPage: React.FC<CareerPortalPageProps> = ({ onNavigateCo
       isGuestApplication: !signedInCandidate,
     });
 
+    setIsSubmittingApp(false);
+    // The confirmation (with the stored Application ID) is shown only once the server accepted it.
+    if (!result.ok) {
+      setAppError(result.error);
+      return;
+    }
+    const created = result.application;
     setAppError('');
     setAppSuccessId(created.id);
     if (signedInCandidate) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ArrowRight,
   BedDouble,
@@ -25,6 +25,7 @@ import {
   Utensils,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
+import { isValidPhone } from '../utils/contactValidation';
 import {
   calculateTransportFeeByDistance,
   computeStageBalanceWidths,
@@ -172,6 +173,8 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
     message: '',
   });
   const [complaintSubmitted, setComplaintSubmitted] = useState(false);
+  const [complaintError, setComplaintError] = useState('');
+  const complaintBusyRef = useRef(false);
 
   const activeStage =
     educationMethodConfig.stages.find((s) => s.id === selectedStageId) ||
@@ -187,8 +190,9 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
     transportConfig.perKmRate
   );
 
-  const handleComplaintSubmit = (e: React.FormEvent) => {
+  const handleComplaintSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (complaintBusyRef.current) return;
     if (
       !complaintForm.guardianName.trim() ||
       !complaintForm.phone.trim() ||
@@ -196,7 +200,26 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
     ) {
       return;
     }
-    submitGuardianComplaint(complaintForm);
+    if (!isValidPhone(complaintForm.phone)) {
+      setComplaintError(
+        language === 'bn'
+          ? 'অনুগ্রহ করে একটি সঠিক মোবাইল নম্বর লিখুন।'
+          : language === 'ar'
+            ? 'يرجى إدخال رقم هاتف صحيح.'
+            : 'Please enter a valid phone number.'
+      );
+      return;
+    }
+    complaintBusyRef.current = true;
+    const result = await submitGuardianComplaint(complaintForm);
+    complaintBusyRef.current = false;
+    // The thank-you note is shown only once the server has stored the message; otherwise the
+    // form keeps what was typed and explains what to correct.
+    if (!result.ok) {
+      setComplaintError(result.error);
+      return;
+    }
+    setComplaintError('');
     setComplaintSubmitted(true);
     setComplaintForm({
       guardianName: '',
@@ -1552,6 +1575,11 @@ export const MadrasahInfographicsSection: React.FC<MadrasahInfographicsSectionPr
                   {complaintSubmitted && (
                     <div className="p-3.5 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 text-xs sm:text-sm font-bold">
                       {labels.feedbackSuccess}
+                    </div>
+                  )}
+                  {complaintError && (
+                    <div role="alert" className="p-3.5 rounded-xl bg-rose-950/90 border border-rose-400/60 text-rose-100 text-xs sm:text-sm font-bold">
+                      {complaintError}
                     </div>
                   )}
                 </div>

@@ -14,6 +14,7 @@ import {
 import { useCMS } from '../store/useCMSStore';
 import type { AdminUser } from '../types/cms';
 import { safeImageUrl } from '../utils/safeUrl';
+import { normalizeAdminRole } from '../utils/cmsLogic';
 
 type SignatorySlot = NonNullable<AdminUser['signatorySlot']>;
 
@@ -236,8 +237,11 @@ export const AdminProfileModal: React.FC<{
     { value: 'coordinator', label: tr('কো-অর্ডিনেটর', 'Coordinator', 'المنسّق') },
   ];
 
+  // Signatory slots appear on public certificates, so only a Super Admin may assign them (server rule).
+  const isSuperAdmin = normalizeAdminRole(currentUser.role) === 'Super Admin';
+
   const slotHolder =
-    form.signatorySlot !== 'none'
+    isSuperAdmin && form.signatorySlot !== 'none'
       ? (state.users || []).find(
           (u) => u.id !== currentUser.id && u.signatorySlot === form.signatorySlot
         )
@@ -411,7 +415,7 @@ export const AdminProfileModal: React.FC<{
       bio: form.bio.trim(),
       photoUrl,
       googleEmail: googleEmail || undefined,
-      signatorySlot: form.signatorySlot,
+      signatorySlot: isSuperAdmin ? form.signatorySlot : currentUser.signatorySlot,
       signatureDataUrl: form.signatureDataUrl || undefined,
     });
     onClose();
@@ -765,7 +769,8 @@ export const AdminProfileModal: React.FC<{
                   id="apm-slot"
                   value={form.signatorySlot}
                   onChange={(e) => setField('signatorySlot', e.target.value as SignatorySlot)}
-                  className={inputClass}
+                  disabled={!isSuperAdmin}
+                  className={`${inputClass} disabled:cursor-not-allowed disabled:opacity-70`}
                   data-testid="admin-profile-signatory-slot"
                 >
                   {slotOptions.map((o) => (
@@ -775,11 +780,17 @@ export const AdminProfileModal: React.FC<{
                   ))}
                 </select>
                 <p className="mt-1.5 text-[11px] text-slate-600 dark:text-slate-300">
-                  {tr(
-                    'প্রতিটি পদে একজনই স্বাক্ষরকারী থাকেন। আপনি পদটি নিলে আগের ব্যক্তির কাছ থেকে তা সরে যাবে।',
-                    'Each slot has a single signatory. Taking a slot removes it from whoever holds it now.',
-                    'لكل خانة موقّع واحد فقط. اختيارك لخانة يسحبها ممن يشغلها حالياً.'
-                  )}
+                  {isSuperAdmin
+                    ? tr(
+                        'প্রতিটি পদে একজনই স্বাক্ষরকারী থাকেন। আপনি পদটি নিলে আগের ব্যক্তির কাছ থেকে তা সরে যাবে।',
+                        'Each slot has a single signatory. Taking a slot removes it from whoever holds it now.',
+                        'لكل خانة موقّع واحد فقط. اختيارك لخانة يسحبها ممن يشغلها حالياً.'
+                      )
+                    : tr(
+                        'স্বাক্ষরকারী পদ শুধু সুপার অ্যাডমিন নির্ধারণ করতে পারেন।',
+                        'Only a Super Admin can assign the signatory slot.',
+                        'لا يمكن تعيين خانة التوقيع إلا من قِبل المشرف العام.'
+                      )}
                 </p>
                 {slotHolder && (
                   <p className="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-200" data-testid="admin-profile-slot-warning">

@@ -84,10 +84,12 @@ test('teacher staff projection: own record, public fallbacks, no unviewable priv
   assert.equal(out.users?.[0].phone, '01700000000');
   assert.equal('password' in (out.users?.[0] || {}), false);
   assert.deepEqual(out.users?.map((u) => u.id), ['u-t', 'u-ch']);
-  // teachers cannot view complaints, emails or the RBAC matrix
+  // teachers cannot view complaints or emails, and receive only their own row of the RBAC matrix
   assert.equal(out.complaints, undefined);
   assert.equal(out.emails, undefined);
-  assert.equal(out.rbacMatrix, undefined);
+  assert.deepEqual(Object.keys(out.rbacMatrix || {}), ['Coordinators / Teachers']);
+  // leads need the leads permission; the tokens permission alone does not expose them
+  assert.equal(out.leads, undefined);
   // settings are not viewable for teachers, but the public value is still sent for the website
   assert.ok(out.settings);
   // virtual-office view is allowed (full config); blog view without update gets a masked key

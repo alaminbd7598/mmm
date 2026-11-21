@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, type Variants } from 'motion/react';
 import {
   ArrowLeft,
@@ -8,26 +8,21 @@ import {
   Briefcase,
   Bus,
   Calculator,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Code2,
-  Compass,
-  Copy,
   Cpu,
   Download,
   ExternalLink,
   Facebook,
   FileText,
-  Gift,
   GitBranch,
   Globe,
   GraduationCap,
   HeartHandshake,
-  Home,
   Image as ImageIcon,
   Layers,
   Mail,
@@ -35,15 +30,11 @@ import {
   Megaphone,
   Menu,
   MessageCircle,
-  Monitor,
   Pause,
   Phone,
   Play,
   Send,
-  Share2,
-  Smartphone,
   Sparkles,
-  Video,
   X,
   Youtube,
 } from 'lucide-react';
@@ -59,7 +50,6 @@ import {
 import {
   filterNotices,
   hasValidVideoUrl,
-  toBengaliDigits,
   validateInquiryInput,
 } from '../utils/cmsLogic';
 import {
@@ -70,6 +60,7 @@ import {
   PublicPageId,
   resolvePageFromPath,
 } from '../utils/i18nContent';
+import { titleForPath } from '../app/seo';
 import { resolveVersionManagerConfig, shouldShowPublicVersion } from '../utils/versionLogic';
 import { AdmissionFormModal } from './AdmissionFormModal';
 import { AdmissionPopupModal } from './AdmissionPopupModal';
@@ -754,6 +745,13 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  // Keep the browser-tab title in step with in-app navigation (the server sets it on full loads).
+  // An open blog article sets its own title in BlogPortalPage.
+  useEffect(() => {
+    const readingPost = currentPage === 'blog' && new URLSearchParams(window.location.search).has('post');
+    if (!readingPost) document.title = titleForPath(PAGE_PATH_MAP[currentPage] || '/');
+  }, [currentPage]);
+
   const handleCloseVerifyCert = () => {
     setVerifyCertCode(null);
     if (typeof window !== 'undefined' && window.location.search.includes('verify-cert')) {
@@ -966,8 +964,10 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     setIsAdmissionModalOpen(true);
   };
 
-  const handleQuickInquirySubmit = (e: React.FormEvent) => {
+  const inquiryBusyRef = useRef(false);
+  const handleQuickInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inquiryBusyRef.current) return;
     const validation = validateInquiryInput(
       {
         name: inqName,
@@ -992,7 +992,8 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     }
 
     setInqError('');
-    const emailDispatched = submitInquiry({
+    inquiryBusyRef.current = true;
+    const result = await submitInquiry({
       name: inqName.trim(),
       phone: inqPhone.trim(),
       email: inqEmail.trim(),
@@ -1000,6 +1001,14 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
       message: inqMessage.trim() || 'Submitted via Public Website Online Admission & Inquiry Form.',
       source: 'Quick Inquiry',
     });
+    inquiryBusyRef.current = false;
+    // The success message is shown only once the server has stored the inquiry.
+    if (!result.ok) {
+      setInqError(result.error);
+      setInqSuccess(null);
+      return;
+    }
+    const emailDispatched = result.emailLog;
 
     setInqSuccess(
       language === 'bn'

@@ -1,9 +1,14 @@
 /**
  * Server persistence for the CMS store.
  *
- * - Loads state from GET /api/state (public projection or role-filtered staff state).
- * - After local changes (debounced), diffs against the last server-confirmed state and sends the
- *   ops: staff -> /api/admin/sync, visitors -> only NEW public records via /api/public/submit.
+ * - Loads state from GET /api/state (public projection or role-filtered staff state). Server data
+ *   is authoritative: an emptied list stays empty instead of falling back to built-in content.
+ * - Staff: after local changes (debounced), diffs against the last server-confirmed state and
+ *   sends the ops to /api/admin/sync. Each op carries the version in which this browser last saw
+ *   its target, so the server can refuse to overwrite someone else's newer change (conflict).
+ * - Visitors never persist local state. Public forms call `submitPublic`, which posts to
+ *   /api/public/submit immediately and reports the server's answer, so a form only shows success
+ *   once the record is really stored.
  * - Polls /api/state/meta (staff 5 s, visitors 30 s, visible tabs only) and refetches when the
  *   version changes and nothing local is pending.
  * - Caches only the public projection in localStorage.
@@ -11,9 +16,17 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { CMSState } from '../../types/cms';
 import { mergeLiveCMSState } from '../../utils/cmsLogic';
-import type { SafeUser, StateKey, StateResponse, SyncOp } from '../../server/contracts';
+import {
+  CONFLICT_REASON_PREFIX,
+  type DemoAccount,
+  type PublicSubmitRequest,
+  type SafeUser,
+  type StateKey,
+  type StateResponse,
+  type SyncOp,
+} from '../../server/contracts';
 import { MAX_SYNC_REQUEST_BYTES, fetchState, fetchStateMeta, postAdminSync, postPublicSubmit } from '../../lib/api/state';
-import { chunkOps, computeOps, fullReplaceOps, publicOpsOnly } from './diff';
+import { chunkOps, computeOps, deepEqual, fullReplaceOps } from './diff';
 import { buildClientFallbackState, stripConfirmedSecrets, stripSecrets } from './state-shape';
 
 export type ClientStorageMode = 'database' | 'demo' | 'offline';
@@ -39,7 +52,27 @@ type Notify = (title: string, description: string, type?: 'success' | 'info' | '
 const CLIENT_FALLBACK_STATE = buildClientFallbackState();
 
 const mergeServerState = (raw: Partial<CMSState>): CMSState =>
-  stripSecrets(mergeLiveCMSState(raw, CLIENT_FALLBACK_STATE));
+  stripSecrets(mergeLiveCMSState(raw, CLIENT_FALLBACK_STATE, { authoritative: true }));
+
+/**
+ * `next` with every top-level value that is structurally equal to `prev`'s replaced by `prev`'s
+ * object, so a background refresh does not hand components new objects for unchanged data (and
+ * e.g. reset an admin form that is being typed into).
+ */
+export function reuseUnchanged(prev: CMSState, next: CMSState): CMSState {
+  const out: Record<string, unknown> = { ...next };
+  const before = prev as unknown as Record<string, unknown>;
+  for (const key of Object.keys(out)) {
+    if (before[key] !== out[key] && deepEqual(before[key], out[key])) out[key] = before[key];
+  }
+  return out as unknown as CMSState;
+}
+
+/** Public projection embedded in the page by the server (see src/app/[[...slug]]/page.tsx). */
+let serverProvidedState: Partial<CMSState> | null = null;
+export function provideInitialPublicState(state: Partial<CMSState> | null | undefined): void {
+  if (state && typeof state === 'object') serverProvidedState = state;
+}
 
 function readPublicCache(): Partial<CMSState> | null {
   try {
@@ -61,10 +94,13 @@ function writePublicCache(publicState: Partial<CMSState>): void {
   }
 }
 
-/** Initial client state: the cached public projection, or seed content without personal data. */
+/**
+ * Initial client state: the public projection the server rendered into the page, else the cached
+ * one, else (first visit with the server unreachable) built-in content without personal data.
+ */
 export function loadInitialClientState(): CMSState {
-  const cached = typeof window === 'undefined' ? null : readPublicCache();
-  return cached ? mergeServerState(cached) : CLIENT_FALLBACK_STATE;
+  const initial = serverProvidedState ?? (typeof window === 'undefined' ? null : readPublicCache());
+  return initial ? mergeServerState(initial) : CLIENT_FALLBACK_STATE;
 }
 
 /** Fresh public-only state from cache/fallback, used to drop staff data from memory at logout. */
@@ -84,9 +120,18 @@ export interface RefetchOptions {
   background?: boolean;
 }
 
+export type PublicSubmitOutcome =
+  | { ok: true; ids: string[] }
+  /** `status` 0 = the server could not be reached; `code` / `error` are the server's answer. */
+  | { ok: false; status: number; code: string; error: string };
+
 export interface ServerSync {
   storageMode: ClientStorageMode;
   liveSyncStatus: LiveSyncStatus;
+  /** Sample sign-ins of a demo server (empty in database mode or when the demo admin is off). */
+  demoAccounts: DemoAccount[];
+  /** Send public form records to the server now and wait for its answer. Does not touch local state. */
+  submitPublic: (items: PublicSubmitRequest['items']) => Promise<PublicSubmitOutcome>;
   /** Push pending local changes now. Resolves true when nothing is left pending. */
   flush: () => Promise<boolean>;
   /** Reload state from the server. Resolves true on success. */
@@ -107,6 +152,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     version: 0,
     lastSyncedAt: null,
   });
+  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -116,6 +162,11 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
   /** Last state the server confirmed (merged and secret-free). Null until the first load/offline fallback. */
   const lastServerRef = useRef<CMSState | null>(null);
   const versionRef = useRef(0);
+  /** Version of the last full load: everything stored up to it has been seen by this browser. */
+  const seenVersionRef = useRef(0);
+  /** Versions of this browser's own confirmed writes since that load (`key`, `key:id`, `key:*`). */
+  const ownWritesRef = useRef(new Map<string, number>());
+  const restartPollRef = useRef<() => void>(() => {});
   const audienceRef = useRef<SyncAudience>('public');
   const modeRef = useRef<ClientStorageMode>('database');
   const replaceExcludeRef = useRef<readonly StateKey[] | null>(null);
@@ -145,22 +196,45 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     return exclude ? fullReplaceOps(stateRef.current, exclude) : computeOps(base, stateRef.current);
   };
 
+  /** Only staff have local changes to persist; visitors' local state is display-only. */
   const hasPendingChanges = useCallback((): boolean => {
+    if (audienceRef.current !== 'staff') return false;
     if (flushingRef.current || dirtyRef.current) return true;
-    const base = lastServerRef.current;
-    if (!base) return false;
-    if (audienceRef.current === 'staff') return pendingStaffOps().length > 0;
-    return publicOpsOnly(computeOps(base, stateRef.current), base).length > 0;
+    return lastServerRef.current !== null && pendingStaffOps().length > 0;
   }, []);
 
+  /** Version in which this browser last saw (or itself wrote) the target of an op. */
+  const withBase = (op: SyncOp): SyncOp => {
+    if (op.op !== 'set' && op.op !== 'upsert' && op.op !== 'delete') return op;
+    const own = ownWritesRef.current;
+    const target = op.op === 'set' ? op.key : `${op.key}:${op.op === 'upsert' ? op.item.id : op.id}`;
+    const base = Math.max(seenVersionRef.current, own.get(target) ?? 0, own.get(`${op.key}:*`) ?? 0);
+    return { ...op, base };
+  };
+
+  const recordOwnWrites = (ops: readonly SyncOp[], version: number) => {
+    const own = ownWritesRef.current;
+    for (const op of ops) {
+      if (op.op === 'set') own.set(op.key, version);
+      else if (op.op === 'upsert') own.set(`${op.key}:${op.item.id}`, version);
+      else if (op.op === 'replace') own.set(`${op.key}:*`, version);
+    }
+  };
+
   const applyServerState = (data: StateResponse) => {
-    const merged = mergeServerState(data.state);
+    const merged = reuseUnchanged(stateRef.current, mergeServerState(data.state));
+    const wasStaff = audienceRef.current === 'staff';
     lastServerRef.current = merged;
     replaceExcludeRef.current = null;
     staleRef.current = false;
     versionRef.current = Number(data.version) || 0;
+    seenVersionRef.current = versionRef.current;
+    ownWritesRef.current.clear();
     audienceRef.current = data.audience === 'staff' ? 'staff' : 'public';
     if (audienceRef.current === 'public') writePublicCache(data.state);
+    setDemoAccounts(Array.isArray(data.demoAccounts) ? data.demoAccounts : []);
+    // Staff poll every 5 s: switch interval as soon as the audience is known, not after the next tick.
+    if ((audienceRef.current === 'staff') !== wasStaff) restartPollRef.current();
     setMode(data.mode === 'demo' ? 'demo' : 'database');
     setState(merged);
     callbacksRef.current.onSession(audienceRef.current === 'staff' ? data.me ?? null : null, audienceRef.current);
@@ -196,12 +270,28 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
 
   const notifyRejected = (reason?: string) => {
     const { notify: n, tr: t } = callbacksRef.current;
+    if (reason?.startsWith(CONFLICT_REASON_PREFIX)) {
+      n(
+        t('অন্য কেউ একই তথ্য পরিবর্তন করেছেন', 'Someone Else Changed This', 'قام شخص آخر بتعديل هذه البيانات'),
+        t(
+          'আপনি সেভ করার আগেই অন্য একজন একই তথ্য পরিবর্তন করেছেন, তাই আপনার পরিবর্তনটি সংরক্ষণ করা হয়নি। সর্বশেষ তথ্য লোড করা হয়েছে; অনুগ্রহ করে দেখে নিয়ে আবার পরিবর্তন করুন।',
+          'Another user changed the same item before you saved, so your change was not stored. The latest data has been loaded; please review it and make your change again.',
+          'قام مستخدم آخر بتعديل العنصر نفسه قبل حفظك، لذلك لم يُحفظ تعديلك. تم تحميل أحدث البيانات؛ يرجى مراجعتها وإعادة التعديل.'
+        ),
+        'info'
+      );
+      return;
+    }
+    const detail =
+      reason === 'TOO_LARGE'
+        ? t('ফাইল বা তথ্যের আকার অনেক বড়।', 'The file or data is too large.', 'حجم الملف أو البيانات كبير جداً.')
+        : reason || '';
     n(
       t('কিছু পরিবর্তন সংরক্ষণ করা যায়নি', 'Some Changes Were Not Saved', 'تعذر حفظ بعض التغييرات'),
       t(
-        `সার্ভার পরিবর্তনগুলো গ্রহণ করেনি${reason ? ` (${reason})` : ''}। সর্বশেষ সংরক্ষিত তথ্য পুনরায় লোড করা হয়েছে।`,
-        `The server did not accept these changes${reason ? ` (${reason})` : ''}. The latest saved data has been reloaded.`,
-        `لم يقبل الخادم هذه التغييرات${reason ? ` (${reason})` : ''}. تمت إعادة تحميل آخر البيانات المحفوظة.`
+        `${detail ? `${detail} ` : ''}সর্বশেষ সংরক্ষিত তথ্য আবার লোড করা হয়েছে; অনুগ্রহ করে পুনরায় চেষ্টা করুন।`,
+        `${detail ? `${detail} ` : ''}The latest saved data has been reloaded; please try again.`,
+        `${detail ? `${detail} ` : ''}تمت إعادة تحميل آخر البيانات المحفوظة؛ يرجى المحاولة مرة أخرى.`
       ),
       'info'
     );
@@ -232,9 +322,9 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     markSyncing();
     let versionJumped = false;
     const rejectedReasons: string[] = [];
-    for (const chunk of chunkOps(ops, MAX_SYNC_REQUEST_BYTES)) {
+    for (const chunk of chunkOps(ops.map(withBase), MAX_SYNC_REQUEST_BYTES)) {
       const before = versionRef.current;
-      const res = await postAdminSync(before, chunk);
+      const res = await postAdminSync(seenVersionRef.current, chunk);
       if (!res.ok) {
         if (res.status === 0 || res.status >= 500) {
           markLocalOnly();
@@ -254,12 +344,13 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
       if (typeof version === 'number') {
         if (version !== before + 1) versionJumped = true;
         versionRef.current = version;
+        if (!rejected?.length) recordOwnWrites(chunk, version);
       }
     }
 
     if (exclude && replaceExcludeRef.current === exclude) replaceExcludeRef.current = null;
     if (rejectedReasons.length > 0) {
-      notifyRejected(rejectedReasons[0]);
+      notifyRejected(rejectedReasons.find((r) => r.startsWith(CONFLICT_REASON_PREFIX)) ?? rejectedReasons[0]);
       await refetchRef.current();
       return 'rejected';
     }
@@ -270,35 +361,24 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     return 'ok';
   };
 
-  const flushVisitor = async (): Promise<'ok' | 'retry' | 'rejected'> => {
-    const base = lastServerRef.current;
-    if (!base) return 'ok';
-    const snapshot = stateRef.current;
-    const submissions = publicOpsOnly(computeOps(base, snapshot), base);
-    if (submissions.length === 0) {
-      // Other local edits by visitors are display-only and never persisted.
-      lastServerRef.current = stripSecrets(snapshot);
-      return 'ok';
-    }
-    if (modeRef.current === 'offline') return 'retry';
-    markSyncing();
-    const before = versionRef.current;
-    const res = await postPublicSubmit(submissions);
-    if (!res.ok && (res.status === 0 || res.status >= 500)) {
-      markLocalOnly();
-      return 'retry';
-    }
-    lastServerRef.current = stripSecrets(snapshot);
-    if (!res.ok) {
-      notifyRejected(res.code === 'RATE_LIMITED' ? 'RATE_LIMITED' : undefined);
-      await refetchRef.current();
-      return 'rejected';
-    }
-    // Adopt the new version only when no one else wrote meanwhile; otherwise polling refetches.
-    if (res.data.version === before + 1) versionRef.current = res.data.version;
-    markSynced();
+  /** Visitors have nothing to persist: local edits are display-only and become the new base. */
+  const flushVisitor = async (): Promise<'ok'> => {
+    if (lastServerRef.current) lastServerRef.current = stripSecrets(stateRef.current);
     return 'ok';
   };
+
+  const submitPublic = useCallback(async (items: PublicSubmitRequest['items']): Promise<PublicSubmitOutcome> => {
+    const res = await postPublicSubmit(items);
+    if (!res.ok) return { ok: false, status: res.status, code: res.code, error: res.error };
+    if (audienceRef.current === 'staff') {
+      // A signed-in staff member used a public form: show the stored record in the admin views.
+      staleRef.current = true;
+    } else if (res.data.version === versionRef.current + 1) {
+      // Our own write is the only change: no need for the next poll to refetch the public state.
+      versionRef.current = res.data.version;
+    }
+    return { ok: true, ids: Array.isArray(res.data.ids) ? res.data.ids : [] };
+  }, []);
 
   const flush = useCallback(async (): Promise<boolean> => {
     if (flushingRef.current) {
@@ -385,6 +465,7 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
     };
 
     const schedule = () => {
+      window.clearTimeout(timer);
       const delay = audienceRef.current === 'staff' ? STAFF_POLL_MS : VISITOR_POLL_MS;
       timer = window.setTimeout(async () => {
         try {
@@ -394,17 +475,31 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
         }
       }, delay);
     };
+    restartPollRef.current = () => {
+      if (!cancelled) schedule();
+    };
 
-    const onVisible = () => {
+    const onVisibility = () => {
       if (document.visibilityState === 'visible') void tick();
+      // Leaving the tab (switching away, closing): push pending staff edits right away.
+      else if (hasPendingChanges()) void flush();
+    };
+    /** Ask before closing a tab that still holds staff edits the server has not confirmed. */
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasPendingChanges()) return;
+      event.preventDefault();
+      event.returnValue = '';
     };
 
     schedule();
-    document.addEventListener('visibilitychange', onVisible);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       cancelled = true;
+      restartPollRef.current = () => {};
       window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('beforeunload', onBeforeUnload);
     };
   }, [flush, refetch, hasPendingChanges]);
 
@@ -413,6 +508,8 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
   return {
     storageMode,
     liveSyncStatus,
+    demoAccounts,
+    submitPublic,
     flush,
     refetch,
     requestFullReplace,

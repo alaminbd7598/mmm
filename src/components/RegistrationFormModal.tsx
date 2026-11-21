@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
+import { isValidEmail, isValidPhone } from '../utils/contactValidation';
 import { localizeDynamicText } from '../utils/i18nContent';
 
 interface RegistrationFormModalProps {
@@ -254,11 +255,13 @@ export const RegistrationFormModal: React.FC<RegistrationFormModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const [submittedLeadId, setSubmittedLeadId] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen && !inlineMode) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
 
     if (!studentName.trim()) {
       setErrorMsg(rc.errStudentName);
@@ -268,18 +271,19 @@ export const RegistrationFormModal: React.FC<RegistrationFormModalProps> = ({
       setErrorMsg(rc.errGuardianName);
       return;
     }
-    if (!phone.trim() || phone.trim().length < 10) {
+    if (!isValidPhone(phone)) {
       setErrorMsg(rc.errPhone);
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
+    if (!isValidEmail(email.trim())) {
       setErrorMsg(rc.errEmail);
       return;
     }
 
     setErrorMsg('');
 
-    const emailLog = submitInquiry({
+    setIsSubmitting(true);
+    const result = await submitInquiry({
       name: studentName.trim(),
       phone: phone.trim(),
       email: email.trim(),
@@ -309,7 +313,13 @@ export const RegistrationFormModal: React.FC<RegistrationFormModalProps> = ({
       },
     });
 
-    setSubmittedLeadId(emailLog.id);
+    setIsSubmitting(false);
+    // The confirmation is shown only once the server has stored the registration.
+    if (!result.ok) {
+      setErrorMsg(result.error);
+      return;
+    }
+    setSubmittedLeadId(result.leadId);
     setIsSuccess(true);
   };
 

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SyncOp } from '../../server/contracts';
-import { chunkOps, computeOps, deepEqual, fullReplaceOps, publicOpsOnly } from './diff';
+import { chunkOps, computeOps, deepEqual, fullReplaceOps } from './diff';
 
 const news = (id: string, text = id) => ({ id, text, active: true, createdAt: '2026-01-01' });
 
@@ -66,21 +66,6 @@ test('fullReplaceOps covers present keys and honours exclusions', () => {
   assert.deepEqual(ops, [
     { op: 'set', key: 'settings', value: { a: 1 } },
     { op: 'replace', key: 'news', items: [news('n1')] },
-  ]);
-});
-
-test('publicOpsOnly keeps only new items of public-create collections', () => {
-  const prev = { leads: [{ id: 'l1', name: 'old' }], news: [] };
-  const next = {
-    leads: [{ id: 'l2', name: 'new' }, { id: 'l1', name: 'old edited' }],
-    emails: [{ id: 'e1' }],
-    news: [news('n1')],
-    settings: { a: 1 },
-  };
-  const subs = publicOpsOnly(computeOps(prev, next), prev);
-  assert.deepEqual(subs, [
-    { key: 'leads', item: { id: 'l2', name: 'new' } },
-    { key: 'emails', item: { id: 'e1' } },
   ]);
 });
 

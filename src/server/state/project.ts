@@ -147,6 +147,13 @@ export function projectStaffState(
       out.users = staffUsers(state, normalizedRole, selfUserId);
       continue;
     }
+    if (key === 'rbacMatrix' && !isSuperAdmin(normalizedRole)) {
+      // The member's own permissions (and nobody else's), so the admin panel shows exactly the
+      // tabs and actions the server will accept.
+      const own = (matrix as Record<string, unknown> | undefined)?.[normalizedRole];
+      if (own) out.rbacMatrix = { [normalizedRole]: own };
+      continue;
+    }
     if (source[key] === undefined || !canViewKey(normalizedRole, key, matrix)) continue;
     switch (key) {
       case 'careerCandidates':

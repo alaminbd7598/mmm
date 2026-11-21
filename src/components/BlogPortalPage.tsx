@@ -20,6 +20,7 @@ import { useCMS } from '../store/useCMSStore';
 import { BlogPostItem } from '../types/cms';
 import { localizeDigits } from '../utils/i18nContent';
 import { safeImageUrl, safeLinkUrl } from '../utils/safeUrl';
+import { SITE_NAME, titleForPath } from '../app/seo';
 
 type Lang = 'bn' | 'en' | 'ar';
 
@@ -291,6 +292,12 @@ export const BlogPortalPage: React.FC = () => {
     if (activePost) articleHeadingRef.current?.focus({ preventScroll: true });
     else topRef.current?.focus({ preventScroll: true });
   }, [activePost?.id]);
+
+  // Browser-tab title: the open article, or the blog page itself.
+  const activePostTitle = activePost ? postTitle(activePost, lang) : '';
+  useEffect(() => {
+    document.title = activePostTitle ? `${activePostTitle} | ${SITE_NAME}` : titleForPath('/blog');
+  }, [activePostTitle]);
 
   useEffect(() => {
     if (!shareNote) return;

@@ -1,11 +1,20 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Home, Info, Mail, RefreshCw, X } from 'lucide-react';
 import { ThemeProvider } from './store/ThemeContext';
 import { CMSProvider, PUBLIC_CACHE_STORAGE_KEY, useCMS } from './store/useCMSStore';
 import { PublicWebsite } from './components/PublicWebsite';
-import { AdminLogin } from './components/AdminLogin';
-import { AdminDashboard } from './components/AdminDashboard';
-import { AdminRole } from './types/cms';
+import type { AdminRole, CMSState } from './types/cms';
+import { DEFAULT_TITLE } from './app/seo';
+
+// The admin panel is loaded on demand, so visitors of the public site never download it.
+const AdminLogin = lazy(() => import('./components/AdminLogin').then((m) => ({ default: m.AdminLogin })));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+
+const AdminLoading: React.FC = () => (
+  <div role="status" aria-label="Loading" className="flex min-h-screen items-center justify-center">
+    <RefreshCw className="h-7 w-7 animate-spin text-[#192f64] dark:text-[#f0c95e]" />
+  </div>
+);
 
 type AppView = 'public' | 'admin-login' | 'admin-dashboard';
 
@@ -145,6 +154,11 @@ const MainShell: React.FC = () => {
     }
   }, [currentView, hasStaffSession]);
 
+  // The public pages set their own titles; the admin screens use the site title.
+  React.useEffect(() => {
+    if (currentView !== 'public') document.title = DEFAULT_TITLE;
+  }, [currentView]);
+
   const handleOpenAdmin = (role?: AdminRole) => {
     if (role) {
       setPreferredAdminRole(role);
@@ -220,27 +234,29 @@ const MainShell: React.FC = () => {
       <AppErrorBoundary key={currentView} onResetToHome={handleBackToWebsite}>
         {currentView === 'public' && <PublicWebsite onOpenAdmin={handleOpenAdmin} />}
 
-        {currentView === 'admin-login' && (
-          <AdminLogin
-            initialRole={preferredAdminRole}
-            onLoginSuccess={() => setCurrentView('admin-dashboard')}
-            onBackToWebsite={handleBackToWebsite}
-          />
-        )}
+        <Suspense fallback={<AdminLoading />}>
+          {currentView === 'admin-login' && (
+            <AdminLogin
+              initialRole={preferredAdminRole}
+              onLoginSuccess={() => setCurrentView('admin-dashboard')}
+              onBackToWebsite={handleBackToWebsite}
+            />
+          )}
 
-        {currentView === 'admin-dashboard' && hasStaffSession && (
-          <AdminDashboard onSwitchToWebsite={handleBackToWebsite} />
-        )}
+          {currentView === 'admin-dashboard' && hasStaffSession && (
+            <AdminDashboard onSwitchToWebsite={handleBackToWebsite} />
+          )}
+        </Suspense>
       </AppErrorBoundary>
     </div>
   );
 };
 
-export default function App() {
+export default function App({ initialPublicState }: { initialPublicState?: Partial<CMSState> | null }) {
   return (
     <AppErrorBoundary>
       <ThemeProvider>
-        <CMSProvider>
+        <CMSProvider initialPublicState={initialPublicState}>
           <MainShell />
         </CMSProvider>
       </ThemeProvider>

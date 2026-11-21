@@ -87,7 +87,7 @@ export const AdminMadrasahInfographicsTab: React.FC = () => {
   const [admissionExtraDraft, setAdmissionExtraDraft] = useState<AdmissionExtraConfig>(
     state.admissionExtraConfig
   );
-  const [uniformDraft, setUniformDraft] = useState<UniformGuideConfig>(state.uniformConfig);
+  const [uniformDraft] = useState<UniformGuideConfig>(state.uniformConfig);
   const [contextDraft, setContextDraft] = useState<MadrasahContextConfig>(
     state.madrasahContextConfig
   );

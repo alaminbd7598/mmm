@@ -19,6 +19,8 @@ interface ChangePasswordDialogProps {
 const inputClass =
   'w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-2.5 pl-10 pr-10 font-mono text-sm text-slate-900 dark:text-white outline-none focus:border-[#005a6e] focus:ring-2 focus:ring-[#005a6e]/20';
 
+const toBengaliNumber = (n: number): string => String(n).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[Number(d)]);
+
 export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
   isOpen,
   forced = false,
@@ -34,6 +36,8 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
   const [error, setError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
 
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
@@ -45,13 +49,41 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
     setConfirmPassword('');
     setError('');
     setIsSaving(false);
+    // Remember what opened the dialog so focus returns there when it closes.
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     firstFieldRef.current?.focus();
+    return () => {
+      openerRef.current?.focus?.();
+      openerRef.current = null;
+    };
   }, [isOpen]);
 
+  // Escape closes the (voluntary) dialog; Tab stays inside it while it is open.
   useEffect(() => {
-    if (!isOpen || forced) return;
+    if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !forced) {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialogRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -75,7 +107,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
     if (newPassword.length < MIN_PASSWORD_LENGTH) {
       setError(
         tr(
-          `নতুন পাসওয়ার্ড কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষরের হতে হবে।`,
+          `নতুন পাসওয়ার্ড কমপক্ষে ${toBengaliNumber(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`,
           `The new password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
           `يجب ألا تقل كلمة المرور الجديدة عن ${MIN_PASSWORD_LENGTH} أحرف.`
         )
@@ -108,7 +140,8 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
     value: string,
     onChange: (v: string) => void,
     autoComplete: string,
-    ref?: React.Ref<HTMLInputElement>
+    ref?: React.Ref<HTMLInputElement>,
+    describedBy?: string
   ) => (
     <div>
       <label htmlFor={id} className="mb-1 block text-xs font-bold text-slate-700 dark:text-slate-200">
@@ -122,6 +155,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
           type={showPasswords ? 'text' : 'password'}
           value={value}
           autoComplete={autoComplete}
+          aria-describedby={describedBy}
           onChange={(e) => {
             setError('');
             onChange(e.target.value);
@@ -142,6 +176,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
       data-testid="change-password-overlay"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="change-password-title"
@@ -208,21 +243,25 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
               tr('নতুন পাসওয়ার্ড *', 'New Password *', 'كلمة المرور الجديدة *'),
               newPassword,
               setNewPassword,
-              'new-password'
+              'new-password',
+              undefined,
+              'change-password-hint'
             )}
             {field(
               'change-password-confirm',
               tr('নতুন পাসওয়ার্ড নিশ্চিত করুন *', 'Confirm New Password *', 'تأكيد كلمة المرور الجديدة *'),
               confirmPassword,
               setConfirmPassword,
-              'new-password'
+              'new-password',
+              undefined,
+              'change-password-hint'
             )}
           </div>
 
           <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-            <span>
+            <span id="change-password-hint">
               {tr(
-                `কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষর, অক্ষর ও সংখ্যা উভয়ই থাকতে হবে।`,
+                `পাসওয়ার্ড কমপক্ষে ${toBengaliNumber(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
                 `At least ${MIN_PASSWORD_LENGTH} characters, with letters and digits.`,
                 `${MIN_PASSWORD_LENGTH} أحرف على الأقل، تتضمن أحرفاً وأرقاماً.`
               )}
@@ -230,7 +269,11 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
             <button
               type="button"
               onClick={() => setShowPasswords((v) => !v)}
-              aria-label={showPasswords ? 'Hide passwords' : 'Show passwords'}
+              aria-label={
+                showPasswords
+                  ? tr('পাসওয়ার্ড লুকান', 'Hide passwords', 'إخفاء كلمات المرور')
+                  : tr('পাসওয়ার্ড দেখুন', 'Show passwords', 'إظهار كلمات المرور')
+              }
               className="shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
             >
               {showPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

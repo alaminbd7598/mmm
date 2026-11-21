@@ -30,9 +30,8 @@ interface AdminLoginProps {
 
 interface RoleChoice {
   role: AdminRole;
-  /** Seed account of the in-memory demo server; shown only in Demo Mode. */
+  /** Username of the sample account for this role on a demo server (its password comes from the server). */
   demoUser: string;
-  demoPass: string;
   icon: React.ElementType;
   shortBn: string;
   shortEn: string;
@@ -43,7 +42,6 @@ const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Super Admin',
     demoUser: 'admin',
-    demoPass: 'admin123',
     icon: ShieldCheck,
     shortBn: 'সুপার অ্যাডমিন',
     shortEn: 'Super Admin',
@@ -52,7 +50,6 @@ const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Chairman / Managing Director',
     demoUser: 'chairman',
-    demoPass: 'chairman123',
     icon: Award,
     shortBn: 'চেয়ারম্যান',
     shortEn: 'Chairman',
@@ -61,7 +58,6 @@ const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Principal / Vice Principal',
     demoUser: 'principal',
-    demoPass: 'principal123',
     icon: GraduationCap,
     shortBn: 'অধ্যক্ষ',
     shortEn: 'Principal',
@@ -70,7 +66,6 @@ const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Coordinators / Teachers',
     demoUser: 'teacher',
-    demoPass: 'teacher123',
     icon: BookOpen,
     shortBn: 'শিক্ষক',
     shortEn: 'Teacher',
@@ -79,11 +74,10 @@ const ROLE_CHOICES: RoleChoice[] = [
   {
     role: 'Content Managers',
     demoUser: 'manager',
-    demoPass: 'manager123',
     icon: Users,
     shortBn: 'ম্যানেজার',
     shortEn: 'Manager',
-    shortAr: 'المدير',
+    shortAr: 'مدير المحتوى',
   },
 ];
 
@@ -99,17 +93,20 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     loginWithGoogleProfile,
     language,
     storageMode,
+    demoAccounts,
     currentUser,
     mustChangePassword,
   } = useCMS();
-  const isDemoMode = storageMode === 'demo';
+  // Sample sign-ins exist only on a demo server that has its demo admin enabled.
+  const isDemoMode = storageMode === 'demo' && demoAccounts.length > 0;
+  const demoPasswordOf = (username: string): string =>
+    demoAccounts.find((account) => account.username === username)?.password || '';
   const initialChoice =
     ROLE_CHOICES.find((r) => r.role === initialRole) || ROLE_CHOICES[0];
 
   const [selectedRole, setSelectedRole] = useState<AdminRole>(initialChoice.role);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -136,7 +133,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   const handleFillDemoCredentials = (choice: RoleChoice) => {
     setSelectedRole(choice.role);
     setUsername(choice.demoUser);
-    setPassword(choice.demoPass);
+    setPassword(demoPasswordOf(choice.demoUser));
     setError('');
   };
 
@@ -260,6 +257,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                     key={choice.role}
                     type="button"
                     data-testid={`login-role-${choice.demoUser}`}
+                    aria-pressed={active}
                     onClick={() => handleSelectRole(choice)}
                     className="group flex flex-col items-center gap-1.5 text-center cursor-pointer"
                   >
@@ -312,6 +310,9 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
+                      autoComplete="username"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       required
                       className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-2.5 pl-10 pr-3.5 font-mono text-sm text-slate-900 dark:text-white outline-none focus:border-[#005a6e] focus:ring-2 focus:ring-[#005a6e]/20"
                     />
@@ -332,13 +333,18 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
                       required
                       className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-2.5 pl-10 pr-10 font-mono text-sm text-slate-900 dark:text-white outline-none focus:border-[#005a6e] focus:ring-2 focus:ring-[#005a6e]/20"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((v) => !v)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-label={
+                        showPassword
+                          ? tr('পাসওয়ার্ড লুকান', 'Hide password', 'إخفاء كلمة المرور')
+                          : tr('পাসওয়ার্ড দেখুন', 'Show password', 'إظهار كلمة المرور')
+                      }
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -348,15 +354,9 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               </div>
 
               <div className="flex items-center justify-between text-xs">
-                <label className="inline-flex cursor-pointer items-center gap-2 font-medium text-slate-600 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="h-4 w-4 rounded accent-[#005a6e]"
-                  />
-                  {tr('সেশন মনে রাখুন', 'Remember me', 'تذكرني')}
-                </label>
+                <span className="font-medium text-slate-600 dark:text-slate-300">
+                  {tr('লগইন ৮ ঘণ্টা সক্রিয় থাকে', 'Sign-in lasts 8 hours', 'تبقى الجلسة فعّالة 8 ساعات')}
+                </span>
                 <span className="font-mono text-[11px] text-slate-500">
                   {selectedRole}
                 </span>
@@ -506,7 +506,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                     <span>{tr(c.shortBn, c.shortEn, c.shortAr)}</span>
                     {isDemoMode && (
                       <span className="font-mono text-[10px]">
-                        {c.demoUser} / {c.demoPass}
+                        {c.demoUser} / {demoPasswordOf(c.demoUser)}
                       </span>
                     )}
                   </button>

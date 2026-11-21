@@ -15,7 +15,6 @@ import {
   CampusVideoConfig,
   CareerApplicationItem,
   CareerApplicationStatus,
-  CareerCandidateAccount,
   CareerJobCircular,
   CMSState,
   ConfigurableRole,
@@ -74,7 +73,6 @@ import {
   enableAllPublicSections,
   findMatchingLeadByPhone,
   normalizeAdminRole,
-  normalizePhoneNumber,
   parseBulkLeadsCsvText,
   resolveCourseTitle,
 } from '../utils/cmsLogic';
@@ -86,21 +84,35 @@ import {
 } from '../utils/translations';
 import { ThemeMode, ThemeContextValue, useTheme } from './ThemeContext';
 import {
+  COLLECTION_KEYS,
   MIN_PASSWORD_LENGTH,
   PRIVATE_KEYS,
-  SUPER_ADMIN_ONLY_KEYS,
+  SINGLETON_KEYS,
+  type DemoAccount,
   type SafeUser,
   type StateKey,
 } from '../server/contracts';
+import { canReplaceKey } from '../server/state/permissions';
 import { postChangePassword, postLogin, postLogout } from '../lib/api/auth';
 import {
   PUBLIC_CACHE_STORAGE_KEY,
   loadInitialClientState,
+  provideInitialPublicState,
   useServerSync,
   type ClientStorageMode,
   type LiveSyncStatus,
   type SyncAudience,
 } from './sync/useServerSync';
+
+const ROLE_LABELS_BN: Record<string, string> = {
+  'Super Admin': 'সুপার অ্যাডমিন',
+  'Chairman / Managing Director': 'চেয়ারম্যান / ব্যবস্থাপনা পরিচালক',
+  'Principal / Vice Principal': 'অধ্যক্ষ / উপাধ্যক্ষ',
+  'Coordinators / Teachers': 'কো-অর্ডিনেটর / শিক্ষক',
+  'Content Managers': 'কনটেন্ট ম্যানেজার',
+};
+
+const ALL_STATE_KEYS: readonly StateKey[] = [...SINGLETON_KEYS, ...COLLECTION_KEYS];
 
 export type { ThemeMode, ThemeContextValue };
 export { useTheme };
@@ -127,6 +139,15 @@ export interface ChangePasswordResult {
   success: boolean;
   error?: string;
 }
+
+/** Result of a public form submission: `error` is a localized message for the visitor. */
+export type SubmitOutcome<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+export type InquiryOutcome = SubmitOutcome<{
+  /** Id of the stored lead: the reference number shown on receipts. */
+  leadId: string;
+  emailLog: EmailNotificationLog;
+}>;
 
 interface CMSContextType {
   state: CMSState;
@@ -155,6 +176,8 @@ interface CMSContextType {
   changePassword: (currentPassword: string, newPassword: string) => Promise<ChangePasswordResult>;
   /** Where data is persisted: MySQL ('database'), in-memory demo server ('demo'), or not reachable ('offline'). */
   storageMode: ClientStorageMode;
+  /** Sample sign-ins offered by a demo server (empty otherwise). */
+  demoAccounts: DemoAccount[];
   loginWithGoogleProfile: (profile: {
     email: string;
     displayName: string;
@@ -208,9 +231,15 @@ interface CMSContextType {
   updateEvent: (event: EventItem) => void;
   deleteEvent: (id: string) => void;
   // Leads & Inquiries CRUD + CRM Pipeline & Deduplication
+  /**
+   * Public forms: sends the inquiry to the server and resolves with its answer; nothing is shown
+   * as submitted unless the server stored it. `viaStaffSync` (admin CRM "add lead") instead adds
+   * or merges the lead in the signed-in staff member's state, which is then synced as usual.
+   */
   submitInquiry: (
-    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>
-  ) => EmailNotificationLog;
+    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>,
+    options?: { viaStaffSync?: boolean }
+  ) => Promise<InquiryOutcome>;
   updateLeadStatus: (leadId: string, newStatus: LeadStatus) => EmailNotificationLog | null;
   updateLeadCourse: (leadId: string, newCourseId: string) => void;
   deleteLead: (id: string) => void;
@@ -237,18 +266,16 @@ interface CMSContextType {
   addCareerJob: (job: Omit<CareerJobCircular, 'id' | 'createdAt'>) => void;
   updateCareerJob: (job: CareerJobCircular) => void;
   deleteCareerJob: (id: string) => void;
+  /** Sends the application to the server; resolves with the stored record (server-assigned id). */
   submitCareerApplication: (
     app: Omit<CareerApplicationItem, 'id' | 'status' | 'submittedAt'>
-  ) => CareerApplicationItem;
+  ) => Promise<SubmitOutcome<{ application: CareerApplicationItem }>>;
   updateCareerApplicationStatus: (
     appId: string,
     status: CareerApplicationStatus,
     hrNote?: string
   ) => void;
   deleteCareerApplication: (appId: string) => void;
-  registerCareerCandidate: (
-    input: Omit<CareerCandidateAccount, 'id' | 'createdAt'>
-  ) => { success: boolean; candidate?: CareerCandidateAccount; error?: string };
   // Users & Roles CRUD + Granular RBAC Matrix
   addAdminUser: (user: Omit<AdminUser, 'id' | 'createdAt'>) => void;
   updateAdminUserRole: (userId: string, role: AdminUser['role']) => void;
@@ -303,9 +330,10 @@ interface CMSContextType {
   updateAdmissionExtraConfig: (config: AdmissionExtraConfig) => void;
   updateUniformConfig: (config: UniformGuideConfig) => void;
   updateMadrasahContextConfig: (config: MadrasahContextConfig) => void;
+  /** Sends the complaint / suggestion to the server and resolves with its answer. */
   submitGuardianComplaint: (
     item: Omit<GuardianComplaintItem, 'id' | 'submittedAt' | 'status'>
-  ) => void;
+  ) => Promise<SubmitOutcome>;
   updateComplaintStatus: (
     id: string,
     status: GuardianComplaintItem['status'],
@@ -335,7 +363,6 @@ interface CMSContextType {
   addAdmissionToken: (token: Omit<AdmissionToken2027, 'id' | 'createdAt'>) => AdmissionToken2027;
   updateAdmissionToken: (token: AdmissionToken2027) => void;
   deleteAdmissionToken: (id: string) => void;
-  markAdmissionTokenApplied: (tokenId: string, leadId?: string) => void;
   // Blog & Automation API CRUD
   addBlogPost: (post: Omit<BlogPostItem, 'id'>) => BlogPostItem;
   updateBlogPost: (post: BlogPostItem) => void;
@@ -360,10 +387,17 @@ interface CMSContextType {
 
 const CMSContext = createContext<CMSContextType | undefined>(undefined);
 
-export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const CMSProvider: React.FC<{
+  children: React.ReactNode;
+  /** Public content rendered into the page by the server, for a first paint with live data. */
+  initialPublicState?: Partial<CMSState> | null;
+}> = ({ children, initialPublicState }) => {
   const { theme, setTheme, toggleTheme } = useTheme();
 
-  const [state, setState] = useState<CMSState>(loadInitialClientState);
+  const [state, setState] = useState<CMSState>(() => {
+    provideInitialPublicState(initialPublicState);
+    return loadInitialClientState();
+  });
 
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -486,19 +520,19 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const sync = useServerSync({ state, setState, onSession: handleSession, notify: pushToast, tr });
-  const { storageMode, liveSyncStatus } = sync;
+  const { storageMode, liveSyncStatus, demoAccounts } = sync;
 
   const loginErrorMessage = (code: string, status: number, roleLabel: string): string => {
     switch (code) {
       case 'INVALID_CREDENTIALS':
         return tr(
-          'ইউজার আইডি অথবা পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে সঠিক ক্রেডেনশিয়াল প্রদান করুন।',
+          'ইউজার আইডি অথবা পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আবার চেষ্টা করুন।',
           'Invalid User ID or Password. Please verify your credentials.',
           'اسم المستخدم أو كلمة المرور غير صحيحة.'
         );
       case 'ROLE_MISMATCH':
         return tr(
-          `এই অ্যাকাউন্টটি "${roleLabel}" রোলের জন্য নির্ধারিত নয়। অনুগ্রহ করে সঠিক রোল নির্বাচন করুন।`,
+          `এই অ্যাকাউন্টটি "${ROLE_LABELS_BN[roleLabel] || roleLabel}" রোলের নয়। অনুগ্রহ করে সঠিক রোল নির্বাচন করুন।`,
           `This account is not assigned to "${roleLabel}". Please select the matching role to sign in.`,
           `هذا الحساب غير مخصص لدور "${roleLabel}". يرجى اختيار الدور الصحيح.`
         );
@@ -510,9 +544,9 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       case 'NOT_CONFIGURED':
         return tr(
-          'সার্ভারে লগইন কনফিগার করা হয়নি (JWT_SECRET নেই)। অনুগ্রহ করে সিস্টেম অ্যাডমিনিস্ট্রেটরের সাথে যোগাযোগ করুন।',
-          'Sign-in is not configured on the server (JWT_SECRET is missing). Please contact the system administrator.',
-          'لم يتم إعداد تسجيل الدخول على الخادم (JWT_SECRET مفقود). يرجى التواصل مع مسؤول النظام.'
+          'সার্ভারে লগইন চালু করা হয়নি। হোস্টিং প্যানেলে DATABASE_URL, JWT_SECRET ও ADMIN_BOOTSTRAP_PASSWORD ঠিকভাবে বসিয়ে সার্ভার রিস্টার্ট করুন।',
+          'Sign-in is not set up on the server. Set DATABASE_URL, JWT_SECRET and ADMIN_BOOTSTRAP_PASSWORD in the hosting panel and restart the server.',
+          'لم يتم إعداد تسجيل الدخول على الخادم. اضبط DATABASE_URL و JWT_SECRET و ADMIN_BOOTSTRAP_PASSWORD ثم أعد تشغيل الخادم.'
         );
       default:
         return status === 0
@@ -579,29 +613,34 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return tr('বর্তমান পাসওয়ার্ডটি সঠিক নয়।', 'The current password is incorrect.', 'كلمة المرور الحالية غير صحيحة.');
       case 'TOO_SHORT':
         return tr(
-          `নতুন পাসওয়ার্ড কমপক্ষে ${MIN_PASSWORD_LENGTH} অক্ষরের হতে হবে।`,
+          `নতুন পাসওয়ার্ড কমপক্ষে ${String(MIN_PASSWORD_LENGTH).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[Number(d)])} অক্ষরের হতে হবে।`,
           `The new password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
           `يجب ألا تقل كلمة المرور الجديدة عن ${MIN_PASSWORD_LENGTH} أحرف.`
         );
       case 'TOO_LONG':
-        return tr('নতুন পাসওয়ার্ডটি অনেক বড়।', 'The new password is too long.', 'كلمة المرور الجديدة طويلة جداً.');
+        return tr(
+          'নতুন পাসওয়ার্ডটি খুব দীর্ঘ; অনুগ্রহ করে আরও ছোট পাসওয়ার্ড দিন।',
+          'The new password is too long; please choose a shorter one.',
+          'كلمة المرور الجديدة طويلة جداً؛ يرجى اختيار كلمة أقصر.'
+        );
       case 'NEEDS_LETTER_AND_DIGIT':
         return tr(
-          'নতুন পাসওয়ার্ডে অক্ষর ও সংখ্যা উভয়ই থাকতে হবে।',
+          'নতুন পাসওয়ার্ডে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।',
           'The new password must contain both letters and digits.',
           'يجب أن تحتوي كلمة المرور الجديدة على أحرف وأرقام.'
         );
       case 'SAME_AS_USERNAME':
+      case 'CONTAINS_USERNAME':
         return tr(
-          'পাসওয়ার্ড ইউজার আইডির মতো হতে পারবে না।',
-          'The password must not be the same as the User ID.',
-          'يجب ألا تكون كلمة المرور مطابقة لاسم المستخدم.'
+          'পাসওয়ার্ডের ভেতরে ইউজার আইডি থাকতে পারবে না।',
+          'The password must not contain the User ID.',
+          'يجب ألا تحتوي كلمة المرور على اسم المستخدم.'
         );
       case 'TOO_COMMON':
         return tr(
-          'এটি একটি পরিচিত ডিফল্ট পাসওয়ার্ড; অনুগ্রহ করে অন্য পাসওয়ার্ড বেছে নিন।',
-          'This is a known default password; please choose another one.',
-          'هذه كلمة مرور افتراضية معروفة؛ يرجى اختيار كلمة أخرى.'
+          'এই পাসওয়ার্ডটি খুব প্রচলিত বা সহজে অনুমান করা যায়; অনুগ্রহ করে অন্য পাসওয়ার্ড বেছে নিন।',
+          'This password is too common or easy to guess; please choose another one.',
+          'كلمة المرور هذه شائعة أو سهلة التخمين؛ يرجى اختيار كلمة أخرى.'
         );
       case 'SAME_AS_CURRENT':
         return tr(
@@ -708,10 +747,11 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isListed = prev.users.some((u) => u.id === currentUser.id);
       const users = prev.users.map((u) => {
         if (u.id === currentUser.id) return { ...u, ...patch };
-        // Ensure signatorySlot uniqueness for chairman / principal / coordinator
+        // Taking a signatory slot (Super Admin only) removes it from whoever held it.
         if (
           patch.signatorySlot &&
           patch.signatorySlot !== 'none' &&
+          patch.signatorySlot !== currentUser.signatorySlot &&
           u.signatorySlot === patch.signatorySlot
         ) {
           return { ...u, signatorySlot: 'none' as const };
@@ -788,19 +828,26 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /** Keys a factory reset must not overwrite: accounts and personal records stay as they are. */
   const RESET_PRESERVED_KEYS: StateKey[] = ['users', ...PRIVATE_KEYS.filter((k) => k !== 'rbacMatrix')];
 
-  /** Keys the signed-in role may not replace wholesale (the server would refuse them). */
-  const fullReplaceExclusions = (): StateKey[] =>
-    currentUserRef.current && normalizeAdminRole(currentUserRef.current.role) === 'Super Admin'
-      ? []
-      : [...SUPER_ADMIN_ONLY_KEYS];
+  /**
+   * Keys the signed-in role may not replace wholesale: everything it cannot fully read, create,
+   * update and delete (same rule as the server). A restore or reset by a role with a partial view
+   * therefore never wipes data that role does not even receive.
+   */
+  const fullReplaceExclusions = (): StateKey[] => {
+    const role = currentUserRef.current?.role;
+    if (!role) return [...ALL_STATE_KEYS];
+    const matrix = stateRef.current.rbacMatrix;
+    return ALL_STATE_KEYS.filter((key) => !canReplaceKey(role, key, matrix));
+  };
 
   const resetToDefaultData = () => {
+    const preserved = [...new Set([...RESET_PRESERVED_KEYS, ...fullReplaceExclusions()])];
     setState((prev) => {
       const next: Record<string, unknown> = { ...INITIAL_CMS_STATE };
-      for (const key of RESET_PRESERVED_KEYS) next[key] = prev[key];
+      for (const key of preserved) next[key] = prev[key];
       return next as unknown as CMSState;
     });
-    sync.requestFullReplace([...new Set([...RESET_PRESERVED_KEYS, ...fullReplaceExclusions()])]);
+    sync.requestFullReplace(preserved);
     pushToast(
       tr('ডাটাবেস রিসেট সম্পন্ন', 'Database Reset Complete', 'تمت إعادة ضبط قاعدة البيانات'),
       tr(
@@ -974,11 +1021,108 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  /** Visitor-facing explanation of why a public form could not be submitted. */
+  const publicSubmitError = (failure: { status: number; code: string; error?: string }): string => {
+    if (failure.status === 0) {
+      return tr(
+        'সার্ভারের সাথে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ দেখে আবার চেষ্টা করুন।',
+        'Could not reach the server. Please check your connection and try again.',
+        'تعذر الاتصال بالخادم. يرجى التحقق من الاتصال والمحاولة مرة أخرى.'
+      );
+    }
+    const detail = failure.error || '';
+    if (failure.code === 'RATE_LIMITED') {
+      return tr(
+        'অল্প সময়ে অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।',
+        'Too many attempts in a short time. Please try again in a little while.',
+        'محاولات كثيرة في وقت قصير. يرجى المحاولة بعد قليل.'
+      );
+    }
+    if (failure.code === 'JOB_CLOSED') {
+      return tr(
+        'এই পদের জন্য এখন আর আবেদন গ্রহণ করা হচ্ছে না।',
+        'This position is no longer accepting applications.',
+        'لم يعد التقديم متاحاً لهذه الوظيفة.'
+      );
+    }
+    if (failure.code === 'TOO_LARGE' || /photo|cv file|too large|too big/i.test(detail)) {
+      return tr(
+        'সংযুক্ত ছবি বা ফাইলের আকার অনেক বড়। অনুগ্রহ করে ছোট আকারের ফাইল দিয়ে আবার চেষ্টা করুন।',
+        'The attached photo or file is too large. Please try again with a smaller file.',
+        'حجم الصورة أو الملف المرفق كبير جداً. يرجى المحاولة بملف أصغر.'
+      );
+    }
+    if (/phone/i.test(detail)) {
+      return tr(
+        'মোবাইল নম্বরটি সঠিক নয়। অনুগ্রহ করে সঠিক নম্বর দিয়ে আবার চেষ্টা করুন।',
+        'The phone number is not valid. Please correct it and try again.',
+        'رقم الهاتف غير صحيح. يرجى تصحيحه والمحاولة مرة أخرى.'
+      );
+    }
+    if (/email/i.test(detail)) {
+      return tr(
+        'ইমেইল ঠিকানাটি সঠিক নয়। অনুগ্রহ করে সঠিক ইমেইল দিয়ে আবার চেষ্টা করুন।',
+        'The email address is not valid. Please correct it and try again.',
+        'البريد الإلكتروني غير صحيح. يرجى تصحيحه والمحاولة مرة أخرى.'
+      );
+    }
+    if (failure.code === 'BAD_REQUEST') {
+      return tr(
+        'কিছু তথ্য সঠিক নয়। অনুগ্রহ করে ফরমের ঘরগুলো যাচাই করে আবার চেষ্টা করুন।',
+        'Some details are not valid. Please check the form and try again.',
+        'بعض البيانات غير صحيحة. يرجى مراجعة النموذج والمحاولة مرة أخرى.'
+      );
+    }
+    const phone = (stateRef.current.settings.phonePrimary || '').split('(')[0].trim();
+    return tr(
+      `দুঃখিত, এখন জমা দেওয়া যায়নি। কিছুক্ষণ পর আবার চেষ্টা করুন${phone ? ` অথবা ${phone} নম্বরে কল করুন` : ''}।`,
+      `Sorry, this could not be submitted right now. Please try again shortly${phone ? ` or call ${phone}` : ''}.`,
+      `عذراً، تعذر الإرسال الآن. يرجى المحاولة بعد قليل${phone ? ` أو الاتصال على ${phone}` : ''}.`
+    );
+  };
+
+  const displayTimestamp = (): string =>
+    new Date().toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
   // Leads & Email Notifications
-  // Leads & Email Notifications with Smart Deduplication & Auto-Progression
-  const submitInquiry = (
+  const submitInquiry = async (
+    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>,
+    options: { viaStaffSync?: boolean } = {}
+  ): Promise<InquiryOutcome> => {
+    if (options.viaStaffSync) {
+      const { lead, emailLog } = addOrMergeLeadLocally(leadInput);
+      return { ok: true, leadId: lead.id, emailLog };
+    }
+    const courseTitle = resolveCourseTitle(state.courses, leadInput.courseId);
+    const adminEmail = buildAdminNewInquiryEmail(
+      { name: leadInput.name, phone: leadInput.phone, email: leadInput.email, courseTitle, message: leadInput.message, source: leadInput.source },
+      state.settings.email,
+      state.settings.instituteName,
+      displayTimestamp()
+    );
+    const res = await sync.submitPublic([
+      { key: 'leads', item: { ...leadInput, id: `lead-${Date.now()}` } },
+      { key: 'emails', item: { ...adminEmail } },
+    ]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
+    pushToast(
+      tr('নতুন আবেদন ও ইমেইল নোটিফিকেশন নিবন্ধিত', 'New Lead & Email Logged', 'تم تسجيل الطلب وإرسال الإشعار'),
+      `"${leadInput.name}" — ${courseTitle}`,
+      'email'
+    );
+    return { ok: true, leadId: res.ids[0] || '', emailLog: { ...adminEmail, id: res.ids[1] || adminEmail.id } };
+  };
+
+  /** Staff CRM entry with smart de-duplication and auto-progression (synced through /api/admin/sync). */
+  const addOrMergeLeadLocally = (
     leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>
-  ): EmailNotificationLog => {
+  ): { lead: AdmissionLead; emailLog: EmailNotificationLog } => {
     const nowFormatted = new Date().toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -1106,7 +1250,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    return adminEmailNotification;
+    return { lead: resultingLead, emailLog: adminEmailNotification };
   };
 
   const updateLeadStatus = (
@@ -1464,31 +1608,19 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const submitCareerApplication = (
+  const submitCareerApplication = async (
     app: Omit<CareerApplicationItem, 'id' | 'status' | 'submittedAt'>
-  ): CareerApplicationItem => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    const newApp: CareerApplicationItem = {
-      ...app,
-      id: `capp-${Date.now()}`,
-      status: 'Received',
-      submittedAt: nowFormatted,
-    };
-    setState((prev) => ({
-      ...prev,
-      careerApplications: [newApp, ...(prev.careerApplications || [])],
-    }));
+  ): Promise<SubmitOutcome<{ application: CareerApplicationItem }>> => {
+    const res = await sync.submitPublic([{ key: 'careerApplications', item: { ...app, id: `capp-${Date.now()}` } }]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
     pushToast(
-      tr('চাকরির আবেদন সফলভাবে জমা হয়েছে!', 'Application Submitted!', 'تم إرسال طلب التوظيف بنجاح!'),
+      tr('চাকরির আবেদন সফলভাবে জমা হয়েছে!', 'Application Submitted!', 'تم إرسال طلب التوظيف بنجاح!'),
       `${app.applicantName} — ${app.jobTitleBn}`
     );
-    return newApp;
+    return {
+      ok: true,
+      application: { ...app, id: res.ids[0] || '', status: 'Received', submittedAt: displayTimestamp() },
+    };
   };
 
   const updateCareerApplicationStatus = (
@@ -1519,38 +1651,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tr('আবেদন রেকর্ড মুছে ফেলা হয়েছে', 'Application Deleted', 'تم حذف الطلب'),
       tr('এইচআর তালিকা থেকে সরানো হয়েছে।', 'Removed from HR list.', 'تمت الإزالة من القائمة.')
     );
-  };
-
-  const registerCareerCandidate = (
-    input: Omit<CareerCandidateAccount, 'id' | 'createdAt'>
-  ): { success: boolean; candidate?: CareerCandidateAccount; error?: string } => {
-    const existing = state.careerCandidates || [];
-    const normalizedEmail = input.email.trim().toLowerCase();
-    if (existing.some((c) => c.email.toLowerCase() === normalizedEmail)) {
-      return {
-        success: false,
-        error: tr(
-          'এই ইমেইল দিয়ে ইতিমধ্যেই একটি অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-          'An account with this email already exists. Please sign in.',
-          'يوجد حساب مسجل بهذا البريد بالفعل.'
-        ),
-      };
-    }
-    const candidate: CareerCandidateAccount = {
-      ...input,
-      email: normalizedEmail,
-      id: `cand-${Date.now()}`,
-      createdAt: new Date().toISOString().slice(0, 10),
-    };
-    setState((prev) => ({
-      ...prev,
-      careerCandidates: [candidate, ...(prev.careerCandidates || [])],
-    }));
-    pushToast(
-      tr('প্রার্থী অ্যাকাউন্ট তৈরি হয়েছে!', 'Candidate Account Created!', 'تم إنشاء حساب المتقدم!'),
-      candidate.fullName
-    );
-    return { success: true, candidate };
   };
 
   // Users & Roles CRUD
@@ -2032,8 +2132,14 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importFullCMSState = (newState: CMSState, summaryMessage?: string) => {
-    setState(newState);
-    sync.requestFullReplace(fullReplaceExclusions());
+    const excluded = fullReplaceExclusions();
+    // Keys this role may not replace keep their current values, locally and on the server.
+    setState((prev) => {
+      const next: Record<string, unknown> = { ...newState };
+      for (const key of excluded) next[key] = prev[key];
+      return next as unknown as CMSState;
+    });
+    sync.requestFullReplace(excluded);
     pushToast(
       tr(
         'প্রতিষ্ঠানের ডাটা সফলভাবে আপডেট হয়েছে',
@@ -2157,29 +2263,14 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const submitGuardianComplaint = (
+  const submitGuardianComplaint = async (
     item: Omit<GuardianComplaintItem, 'id' | 'submittedAt' | 'status'>
-  ) => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    const newItem: GuardianComplaintItem = {
-      ...item,
-      id: `comp-${Date.now()}`,
-      submittedAt: nowFormatted,
-      status: 'New',
-    };
-    setState((prev) => ({
-      ...prev,
-      complaints: [newItem, ...(prev.complaints || [])],
-    }));
+  ): Promise<SubmitOutcome> => {
+    const res = await sync.submitPublic([{ key: 'complaints', item: { ...item, id: `comp-${Date.now()}` } }]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
     pushToast(
       tr(
-        'অভিযোগ / পরামর্শ গৃহীত হয়েছে',
+        'অভিযোগ / পরামর্শ গৃহীত হয়েছে',
         'Feedback / Suggestion Received',
         'تم استلام الملاحظة / الاقتراح'
       ),
@@ -2189,6 +2280,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         'تم إرسال ملاحظاتكم مباشرة إلى إدارة المعهد.'
       )
     );
+    return { ok: true };
   };
 
   const updateComplaintStatus = (
@@ -2270,7 +2362,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             'تمت مزامنة جميع البيانات مع الخادم المباشر!'
           ),
           tr(
-            'আপনার লোকাল ও ডিপ্লয়মেন্টের সকল তথ্য এখন যে কেউ শেয়ার্ড লিংক থেকে লাইভ দেখতে পারবেন।',
+            'সকল তথ্য সার্ভারে সংরক্ষিত হয়েছে; এখন যেকোনো ডিভাইস থেকে ওয়েবসাইটে সর্বশেষ তথ্য দেখা যাবে।',
             'All local and deployment updates are now live and accessible to everyone via the shared URL.',
             'جميع التحديثات متاحة الآن مباشرة للجميع عبر الرابط المشترك.'
           )
@@ -2499,23 +2591,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const markAdmissionTokenApplied = (tokenId: string, leadId?: string) => {
-    const nowIso = new Date().toISOString();
-    setState((prev) => ({
-      ...prev,
-      admissionTokens2027: (prev.admissionTokens2027 || []).map((t) =>
-        t.id === tokenId
-          ? {
-              ...t,
-              status: 'Applied',
-              appliedLeadId: leadId || t.appliedLeadId,
-              appliedAt: nowIso,
-            }
-          : t
-      ),
-    }));
-  };
-
   // --- Blog & Automation API CRUD ---
   const addBlogPost = (post: Omit<BlogPostItem, 'id'>): BlogPostItem => {
     const created: BlogPostItem = {
@@ -2719,6 +2794,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         mustChangePassword,
         changePassword,
         storageMode,
+        demoAccounts,
         loginWithGoogleProfile,
         updateCurrentUserProfile,
         logout,
@@ -2756,7 +2832,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitCareerApplication,
         updateCareerApplicationStatus,
         deleteCareerApplication,
-        registerCareerCandidate,
         addAdminUser,
         updateAdminUserRole,
         deleteAdminUser,
@@ -2805,7 +2880,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAdmissionToken,
         updateAdmissionToken,
         deleteAdmissionToken,
-        markAdmissionTokenApplied,
         addBlogPost,
         updateBlogPost,
         deleteBlogPost,

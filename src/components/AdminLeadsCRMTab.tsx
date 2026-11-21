@@ -4,12 +4,8 @@ import {
   MessageSquare,
   Calendar,
   Clock,
-  User,
-  Users,
   CheckCircle2,
-  AlertCircle,
   Search,
-  Filter,
   Upload,
   FileSpreadsheet,
   Download,
@@ -19,10 +15,7 @@ import {
   Sparkles,
   Plus,
   RefreshCw,
-  FileText,
-  ExternalLink,
   ChevronRight,
-  ChevronLeft,
   Columns,
   List,
   PhoneCall,
@@ -30,7 +23,6 @@ import {
   GraduationCap,
   X,
   Send,
-  HelpCircle,
   Link as LinkIcon,
   Check,
   ClipboardCheck,
@@ -48,7 +40,6 @@ import {
   CRM_PIPELINE_STAGES,
   localizeLeadStatus,
   normalizePhoneNumber,
-  parseBulkLeadsCsvText,
   toBengaliDigits,
 } from '../utils/cmsLogic';
 import {
@@ -74,18 +65,15 @@ const ADMISSION_COUNSELORS = [
 ];
 
 export const AdminLeadsCRMTab: React.FC<AdminLeadsCRMTabProps> = ({
-  onInspectLead,
   canEdit = true,
   canDelete = true,
 }) => {
   const {
     state,
-    currentUser,
     language,
     pushToast,
     submitInquiry,
     updateLeadStatus,
-    updateLeadCourse,
     deleteLead,
     addLeadCallLog,
     addLeadNote,
@@ -104,7 +92,7 @@ export const AdminLeadsCRMTab: React.FC<AdminLeadsCRMTabProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('All');
   const [priorityFilter, setPriorityFilter] = useState<'All' | LeadPriority>('All');
-  const [statusFilter, setStatusFilter] = useState<'All' | LeadStatus>('All');
+  const [statusFilter] = useState<'All' | LeadStatus>('All');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Registration' | 'Admission' | 'Marketing'>('All');
   const [onlyDueToday, setOnlyDueToday] = useState(false);
 
@@ -152,14 +140,18 @@ export const AdminLeadsCRMTab: React.FC<AdminLeadsCRMTabProps> = ({
   const handleCreateManualLead = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualName.trim() || !manualPhone.trim()) return;
-    submitInquiry({
-      name: manualName.trim(),
-      phone: manualPhone.trim(),
-      email: manualEmail.trim() || `${manualPhone.replace(/\D/g, '')}@maharat-walkin.local`,
-      courseId: manualCourseId,
-      message: `${manualGuardian ? `অভিভাবক: ${manualGuardian.trim()} | ` : ''}[${manualSource}] ${manualNote.trim() || 'ফ্রন্ট ডেস্ক থেকে সরাসরি লিড এন্ট্রি'}`,
-      source: 'Registration Form',
-    });
+    void submitInquiry(
+      {
+        name: manualName.trim(),
+        phone: manualPhone.trim(),
+        email: manualEmail.trim() || `${manualPhone.replace(/\D/g, '')}@maharat-walkin.local`,
+        courseId: manualCourseId,
+        message: `${manualGuardian ? `অভিভাবক: ${manualGuardian.trim()} | ` : ''}[${manualSource}] ${manualNote.trim() || 'ফ্রন্ট ডেস্ক থেকে সরাসরি লিড এন্ট্রি'}`,
+        source: 'Registration Form',
+      },
+      // Staff entry: saved through the staff sync with CRM de-duplication.
+      { viaStaffSync: true }
+    );
     pushToast(
       tr('নতুন লিড যুক্ত হয়েছে', 'New Lead Added', 'تمت إضافة الطلب الجديد'),
       tr(`${manualName.trim()} লিড টু অ্যাডমিশন পাইপলাইনে যুক্ত হয়েছে।`, `${manualName.trim()} added to Lead to Admission pipeline.`, 'تمت الإضافة بنجاح'),

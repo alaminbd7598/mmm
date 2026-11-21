@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowRight,
@@ -18,7 +18,6 @@ import {
   Quote,
   Send,
   ShieldCheck,
-  Sparkles,
   Ticket,
   User,
   Users,
@@ -66,6 +65,7 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
   const [address, setAddress] = useState('');
   const [formError, setFormError] = useState('');
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
+  const submitBusyRef = useRef(false);
 
   const [tokenMatch, setTokenMatch] = useState<AdmissionTokenMatch | null>(null);
 
@@ -219,7 +219,7 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
     },
   }[language];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validation = validateQuickHomeRegistration(
       {
@@ -263,7 +263,9 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
       .filter(Boolean)
       .join(' | ');
 
-    submitInquiry({
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
+    const result = await submitInquiry({
       name: `${studentName.trim()} (অভিভাবক: ${guardianName.trim()})`,
       phone: mobile.trim(),
       email: guardianEmail.trim() || 'online-registration@maharatmadrasah.com',
@@ -275,6 +277,12 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
       targetClass,
       preferredAccommodation: accommodation,
     });
+    submitBusyRef.current = false;
+    // The success card is shown only once the server has stored the registration.
+    if (!result.ok) {
+      setFormError(result.error);
+      return;
+    }
 
     if (matchedToken) {
       void applyAdmissionToken(matchedToken.id, mobile.trim());

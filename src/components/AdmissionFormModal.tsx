@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
+import { photoFileToDataUrl } from '../utils/imageResize';
 import { AdmissionLead, DetailedAdmissionData } from '../types/cms';
 import { findMatchingLeadByPhone, normalizePhoneNumber } from '../utils/cmsLogic';
 
@@ -88,6 +89,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
   const [submittedEmailLogId, setSubmittedEmailLogId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [photoFileName, setPhotoFileName] = useState<string>('No file chosen');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -210,13 +212,11 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setPhotoFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        updateDetail('studentPhotoUrl', reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    // Large camera pictures are scaled down so the application is not refused for its size.
+    void photoFileToDataUrl(file).then(
+      (dataUrl) => updateDetail('studentPhotoUrl', dataUrl),
+      () => undefined
+    );
   };
 
   const handleDobChange = (dobValue: string) => {
@@ -387,7 +387,8 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
     setStep((prev) => Math.min(6, prev + 1));
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
+    if (isSubmitting) return;
     const finalName =
       details.studentNameBn && details.studentNameEn
         ? `${details.studentNameBn} (${details.studentNameEn})`
@@ -399,18 +400,27 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
         ? state.courses.find((c) => c.category === 'Hifzul Quran')?.id
         : state.courses.find((c) => c.category === 'Academic')?.id;
 
-    const emailLog = submitInquiry({
+    setIsSubmitting(true);
+    const result = await submitInquiry({
       name: finalName,
       phone: finalPhone,
-      email: studentEmail.trim() || 'applicant@craftinstitute.edu.bd',
+      email: studentEmail.trim() || 'online-admission@maharatmadrasah.com',
       courseId: matchedCourse || selectedCourseId || state.courses[0]?.id || 'course-prep-2',
       message: `বিভাগ: ${details.department} | শ্রেণি: ${details.targetClass} | ক্যাটাগরি: ${details.academicCategory} | সেশন: ${details.session}`,
       source: 'Full Admission Form',
       detailedData: details,
     });
 
-    setSubmittedEmailLogId(emailLog.id);
+    setIsSubmitting(false);
     setIsPreviewMode(false);
+    // The receipt is shown only once the server has stored the application; otherwise the form
+    // returns to its last step with the reason, keeping everything that was typed.
+    if (!result.ok) {
+      setErrorMsg(result.error);
+      return;
+    }
+    setErrorMsg('');
+    setSubmittedEmailLogId(result.leadId);
   };
 
   const handlePrintAdmissionReceipt = () => {

@@ -8,10 +8,8 @@
 import type { CMSState } from '../../types/cms';
 import {
   COLLECTION_KEYS,
-  PUBLIC_CREATE_KEYS,
   SINGLETON_KEYS,
   type CollectionKey,
-  type PublicCreateKey,
   type SingletonKey,
   type StateKey,
   type SyncOp,
@@ -120,28 +118,6 @@ export function fullReplaceOps(state: StateLike, exclude: readonly StateKey[] = 
     }
   }
   return ops;
-}
-
-const isPublicCreateKey = (key: string): key is PublicCreateKey =>
-  (PUBLIC_CREATE_KEYS as readonly string[]).includes(key);
-
-export interface PublicSubmission {
-  key: PublicCreateKey;
-  item: SyncItem;
-}
-
-/**
- * What an anonymous visitor may persist: upserts of items whose id did not exist in `prev`
- * (i.e. newly created records) in the public-create collections. Everything else is dropped.
- */
-export function publicOpsOnly(ops: readonly SyncOp[], prev: StateLike): PublicSubmission[] {
-  const out: PublicSubmission[] = [];
-  for (const op of ops) {
-    if (op.op !== 'upsert' || !isPublicCreateKey(op.key)) continue;
-    const existed = collectionItems(prev, op.key).some((it) => it.id === op.item.id);
-    if (!existed) out.push({ key: op.key, item: op.item });
-  }
-  return out;
 }
 
 const encoder = new TextEncoder();
