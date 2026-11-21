@@ -893,6 +893,88 @@ async function main() {
       await ctx.close();
     });
 
+    await scenario('edits made offline survive a reconnect whose first save fails, and are saved by the next one', async () => {
+      const ctx = await newVisitorContext(browser);
+      const page = await ctx.newPage();
+      await uiLogin(page, ADMIN.username, adminNewPassword);
+      await openAdminTab(page, /নোটিশ বোর্ড ম্যানেজার|Notice Board Manager/);
+      const notices = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      const target = notices[0];
+      const offlineTitle = `${target.title} (retry ${RUN_ID})`;
+      // Offline long enough for a poll to notice (the client switches to its offline mode).
+      const pollFailed = page.waitForEvent('requestfailed', { predicate: (r) => r.url().includes('/api/state/meta'), timeout: 20_000 });
+      await page.route('**/api/**', (route) => route.abort());
+      await pollFailed;
+      await page.locator(`button[aria-label="Edit ${target.title}"]`).first().click();
+      await page.locator('form input[type="text"]').first().fill(offlineTitle);
+      await page.locator('form button[type="submit"]').first().click();
+      await page.getByTestId('admin-unsaved-badge').waitFor({ timeout: 15_000 });
+      // The server is reachable again, but saving fails (as during a database outage).
+      let refused = 0;
+      await page.unroute('**/api/**');
+      await page.route('**/api/admin/sync', (route) => {
+        refused += 1;
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'The database is temporarily unavailable.', code: 'STORE_UNAVAILABLE' }),
+        });
+      });
+      await waitForApi(page, '/api/admin/sync');
+      await page.waitForTimeout(2_500);
+      assert(refused >= 1, 'no save was attempted after reconnecting');
+      assert((await page.getByTestId('admin-unsaved-badge').count()) === 1, 'the unsaved badge disappeared although nothing was saved');
+      assert((await page.getByText(offlineTitle).count()) > 0, 'the offline edit was replaced by the server state');
+      const during = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      assert(during.find((n) => n.id === target.id).title === target.title, 'the edit reached the server although saving was refused');
+      await page.unroute('**/api/admin/sync');
+      await page.getByTestId('admin-unsaved-badge').waitFor({ state: 'detached', timeout: 20_000 });
+      const after = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      assert(after.find((n) => n.id === target.id).title === offlineTitle, 'the offline edit was not saved once saving worked again');
+      await ctx.close();
+    });
+
+    await scenario('a signatory assignment refused as a conflict leaves the slot with its holder', async () => {
+      const sync = async (baseVersion, ops) => {
+        const res = await admin.request.post(BASE + '/api/admin/sync', { data: { baseVersion, ops } });
+        return { status: res.status(), body: await res.json() };
+      };
+      const users = async () => (await (await admin.request.get(BASE + '/api/state')).json()).state.users;
+      const loaded = await (await admin.request.get(BASE + '/api/state')).json();
+      const record = loaded.state.users.find((u) => u.username === teacher.username);
+      const holder = loaded.state.users.find((u) => u.signatorySlot === 'coordinator');
+      assert(record && holder && holder.id !== record.id, 'needs the teacher account and a coordinator signatory');
+
+      // Someone else edits the teacher's account after this client loaded the state ...
+      const renamed = `${record.fullName} (edited)`;
+      const other = await sync(loaded.version, [{ op: 'upsert', key: 'users', item: { ...record, fullName: renamed } }]);
+      assert(other.status === 200 && !other.body.rejected, `edit returned ${other.status} ${JSON.stringify(other.body)}`);
+      // ... so the stale client's assignment is refused, and the holder must keep the slot.
+      const stale = await sync(loaded.version, [{ op: 'upsert', key: 'users', item: { ...record, signatorySlot: 'coordinator' } }]);
+      assert(stale.status === 200, `stale assignment returned ${stale.status}`);
+      assert((stale.body.rejected || []).some((r) => r.index === 0 && r.reason.startsWith('CONFLICT:')), `no conflict: ${JSON.stringify(stale.body)}`);
+      assert(stale.body.version === other.body.version, 'a refused assignment changed the state version');
+      let now = await users();
+      assert(now.find((u) => u.id === holder.id).signatorySlot === 'coordinator', 'the slot was taken from its holder although the assignment was refused');
+      assert(now.find((u) => u.id === record.id).signatorySlot !== 'coordinator', 'the refused assignment was stored');
+      assert(now.find((u) => u.id === record.id).fullName === renamed, 'the other edit was overwritten');
+
+      // With the current state the assignment moves the slot, and moving it back restores everything.
+      const fresh = await sync(other.body.version, [{ op: 'upsert', key: 'users', item: { ...record, fullName: renamed, signatorySlot: 'coordinator' } }]);
+      assert(fresh.status === 200 && !fresh.body.rejected, `assignment returned ${fresh.status} ${JSON.stringify(fresh.body)}`);
+      now = await users();
+      assert(now.find((u) => u.id === record.id).signatorySlot === 'coordinator', 'assignment not stored');
+      assert(now.find((u) => u.id === holder.id).signatorySlot === 'none', 'the previous holder kept the slot');
+      const back = await sync(fresh.body.version, [
+        { op: 'upsert', key: 'users', item: record },
+        { op: 'upsert', key: 'users', item: holder },
+      ]);
+      assert(back.status === 200 && !back.body.rejected, `restore returned ${back.status} ${JSON.stringify(back.body)}`);
+      now = await users();
+      assert(now.find((u) => u.id === holder.id).signatorySlot === 'coordinator', 'slot not restored');
+      assert(now.find((u) => u.id === record.id).fullName === record.fullName, 'teacher not restored');
+    });
+
     // ------------------------------------------------------------------------------------
     // Navigation and metadata
     // ------------------------------------------------------------------------------------
@@ -987,14 +1069,27 @@ async function main() {
         },
       });
       assert(submit.status() === 200, `submit returned ${submit.status()}`);
+      const first = await (await api.post('/api/public/career/status', { data: { query: email } })).json();
+      assert(first.applications && first.applications.length === 1, `first lookup ${JSON.stringify(first)}`);
+      // HR writes a note for the applicant; the no-login lookup must not hand it to whoever knows the email.
+      const staff = await (await admin.request.get(BASE + '/api/state')).json();
+      const storedApp = (staff.state.careerApplications || []).find((a) => a.id === first.applications[0].id);
+      assert(storedApp, 'application not visible to the admin');
+      const hrNote = `Interview Saturday ${RUN_ID}`;
+      const noted = await admin.request.post(BASE + '/api/admin/sync', {
+        data: { baseVersion: staff.version, ops: [{ op: 'upsert', key: 'careerApplications', item: { ...storedApp, hrNote } }] },
+      });
+      assert(noted.status() === 200 && !(await noted.json()).rejected, `saving the HR note returned ${noted.status()}`);
       const lookup = await api.post('/api/public/career/status', { data: { query: email } });
       const body = await lookup.json();
       await api.dispose();
       assert(lookup.status() === 200 && body.applications.length === 1, `lookup ${lookup.status()} ${JSON.stringify(body)}`);
       const entry = body.applications[0];
-      for (const f of ['phone', 'email', 'whatsapp', 'paymentTrxId', 'cvFileDataUrl', 'expectedSalaryBn']) {
+      for (const f of ['phone', 'email', 'whatsapp', 'paymentTrxId', 'cvFileDataUrl', 'expectedSalaryBn', 'hrNote']) {
         assert(!(f in entry), `status lookup exposes ${f}`);
       }
+      assert(!JSON.stringify(body).includes(hrNote), 'status lookup exposes the HR note');
+      assert(Object.keys(entry).sort().join() === 'applicantName,id,jobTitleBn,status,submittedAt', `status fields: ${Object.keys(entry)}`);
 
       await visitor.goto(BASE + '/career', { waitUntil: 'networkidle' });
       await dismissOverlays(visitor);

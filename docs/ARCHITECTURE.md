@@ -30,7 +30,9 @@ the client store live in `src/server/contracts.ts`.
 
 `npm run build` runs three steps: `tsc --noEmit` (type check), `scripts/prepare-db.mjs` (with
 `DATABASE_URL`: `prisma db push`, which creates or updates the tables and refuses changes that
-would lose data; without it: nothing) and `next build`. The type check runs on its own, not inside
+would lose data; without it: nothing; on a Vercel preview build: nothing either, unless
+`ALLOW_PREVIEW_DB_PUSH=1`, so branch builds cannot change a database shared with production) and
+`next build`. The type check runs on its own, not inside
 `next build` (`typescript.ignoreBuildErrors`), and build workers are limited to one
 (`experimental.cpus`), so the two memory-heavy steps never overlap: the build peaks at about
 1.3 GB (measured in a memory-limited cgroup: passes at 1280 MB, fails at 1152 MB).
@@ -83,7 +85,8 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
   key is used. In production the demo admin is closed unless `DEMO_MODE=1`.
 - Every request re-checks the stored account: it must exist, be enabled and carry the same
   `sessionVersion` as the token. Logout, password change and an admin password reset raise the
-  version, which voids all earlier tokens (same for career candidates).
+  version, which voids all earlier tokens (same for career candidates; a candidate password
+  replaced by `db:import` also raises it).
 - Passwords are never sent to browsers and no account is seeded with one in `database` mode
   (seeded accounts: `admin` plus the three certificate signatories). On start, when no Super Admin
   has a password, the first one receives `ADMIN_BOOTSTRAP_PASSWORD` (≥ 12 chars, password policy)
@@ -105,7 +108,13 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
 - `src/server/rate-limit.ts`: in-memory fixed-window counters (per process, capped map). The client
   address is the entry `TRUSTED_PROXY_HOPS` (default 1) from the right of `X-Forwarded-For`; on
   Vercel `x-vercel-forwarded-for`. Client-supplied left-hand entries are never used; requests
-  without a trustworthy address share one larger bucket per limit. Login also locks per username.
+  without a trustworthy address share one larger bucket per limit. Login also locks per username:
+  every attempt is counted before the password is checked and only a complete sign-in clears the
+  counter (`beginAttempt`), so parallel guesses cannot outrun it.
+- Staff sync (`/api/admin/sync`, bodies up to 12 MB) has a per-account ceiling
+  (`src/server/state/sync-limit.ts`): 3000 requests and 2 GB of bodies per 10 minutes. The admin
+  panel sends fewer than 3 requests per second while someone types and restores a backup in 8 MB
+  chunks, so only a runaway script or a stolen session reaches it (HTTP 429 `RATE_LIMITED`).
 - Anonymous submissions: zod field whitelists, per-item file size, 6 MB body, per-address and
   site-wide daily caps for submissions and uploaded bytes, ceiling on stored inline files
   (`MAX_STORED_UPLOAD_MB`; they are part of the cached snapshot, so they are bounded by memory).
@@ -130,11 +139,12 @@ Every `applyOps` call runs in one interactive transaction and bumps `SiteMeta.ve
 | POST `/api/public/submit` | none, rate-limited | `PublicSubmitRequest` (leads, emails, complaints, careerApplications; create only). |
 | POST `/api/public/admission-token/match` | none, rate-limited | `{phone?, email?}` → minimal token discount info for the guardian's own token. |
 | POST `/api/public/admission-token/apply` | none, rate-limited | `{tokenId, phone}` → marks the token applied. |
-| POST `/api/public/career/register` · `login` · `logout`, GET `me` | candidate | Candidate account + own applications. |
+| POST `/api/public/career/register` · `login` · `logout`, GET `me` | candidate | Candidate account + own applications (with the HR note). |
+| POST `/api/public/career/status` | none, rate-limited | `{query}` (phone, WhatsApp, email or application id) → first name, position, status and date only; never the HR note. |
 | POST `/api/auth/login` · `logout` · `change-password`, GET `me` | — / staff | Staff auth. |
 | POST `/api/chat` | none, rate-limited | Noor AI. Knowledge base and institute details come from the DB, not the request. |
-| POST `/api/ai-extract-institution` | staff | Gemini document extractor. |
-| POST `/api/ai-smart-publish` | staff | Gemini content router. |
+| POST `/api/ai-extract-institution` | staff | Gemini document extractor. Documents are passed as delimited data; the answer is reduced to the response schema (`sanitizeExtraction`). |
+| POST `/api/ai-smart-publish` | staff | Gemini content router. The post is passed as delimited data; the answer is merged field by field with whitelisted sections and capped text. |
 | POST `/api/blog/action-publish` | Bearer API key | Blog webhook. Key = `BLOG_API_KEY` env or the admin-set key; the legacy default key is refused. |
 | GET `/api/public/virtual-office/status` | none | Sanitised status. |
 | POST `/api/public/virtual-office/checkin` | none, rate-limited | Lead-capture gate; creates session + lead server-side. |
@@ -184,6 +194,22 @@ name): that submission is appended to the existing lead's notes. Another child o
 gets a lead of its own with a note linking it to the sibling's lead, and a full admission form is
 never dropped. Virtual-office check-ins follow the same rule.
 
+### Writes planned from a snapshot
+
+Public submissions, admission-token use, virtual-office check-ins and the blog webhook read the
+snapshot, plan their ops and apply them through `applyPlanned` (`src/server/db/optimistic.ts`):
+`applyOps(..., { baseVersion: snapshot.version, atomic: true })`. If a document the plan overwrites
+(e.g. the lead a repeat submission is merged into) was changed in between, nothing is written
+(`StoreStaleError`), and the plan is rebuilt on the new state, up to three times, then HTTP 503
+`BUSY`. New records never conflict. Rate-limit and upload budgets are consumed once, before the
+first attempt.
+
+The staff sync uses the same all-or-nothing mode when the server appends its own writes: assigning
+a signatory slot adds a write that takes the slot from its previous holder
+(`enforceSignatorySlots`, applied in `src/server/state/sync-apply.ts`). If any op of such a request
+conflicts, none is stored and all are reported as conflicts, so a refused assignment can never
+leave the slot without a holder. Other sync requests keep per-op conflict handling.
+
 ### Database outage
 
 Driver failures map to `StoreUnavailableError` → HTTP 503 (`STORE_UNAVAILABLE`). Connections wait
@@ -197,5 +223,6 @@ public content the process embedded (or the browser's cached copy / built-in con
 `NEXT_PUBLIC_APP_URL` (when unset, metadata URLs use the request host), `BLOG_API_KEY` (optional), `ADMIN_BOOTSTRAP_PASSWORD` (first sign-in),
 `TRUSTED_PROXY_HOPS` (optional, default 1), `DEMO_MODE=1` (demo admin in production),
 `CHAT_DAILY_LIMIT` (optional, default 3000), `MAX_STORED_UPLOAD_MB` (optional, default 160),
-`SKIP_DB_PUSH=1` (build without touching the database), `NEXT_OUTPUT=standalone` (Docker only).
+`SKIP_DB_PUSH=1` (build without touching the database), `ALLOW_PREVIEW_DB_PUSH=1` (Vercel preview
+builds skip the schema sync unless this is set), `NEXT_OUTPUT=standalone` (Docker only).
 See `.env.example`.
