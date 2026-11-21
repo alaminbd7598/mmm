@@ -4,6 +4,7 @@ import {
   CareerJobCircular,
   LeadStatus,
 } from '../types/cms';
+import { isGoogleMapsEmbedUrl } from './safeUrl';
 
 export const DEFAULT_BOYS_CAMPUS_MAP_URL = 'https://maps.app.goo.gl/SxcrUPWtW8VbSYdEA';
 export const DEFAULT_BOYS_CAMPUS_EMBED_URL =
@@ -26,9 +27,9 @@ export function resolveGoogleMapsEmbedUrl(
   const raw = (rawUrlOrQuery || '').trim();
   if (!raw) return fallbackEmbedUrl;
 
-  // Already an embed URL
+  // Already an embed URL: accepted only from Google's own hosts, never from an arbitrary site.
   if (raw.includes('/maps/embed') || raw.includes('output=embed')) {
-    return raw;
+    return isGoogleMapsEmbedUrl(raw) ? raw : fallbackEmbedUrl;
   }
 
   // Known verified Maharat Boys & Main Campus short link
@@ -71,7 +72,7 @@ export function resolveGoogleMapsEmbedUrl(
 /**
  * Pure step-by-step Lead-to-Admission stage progression helper.
  */
-export const LEAD_TO_ADMISSION_FLOW: LeadStatus[] = [
+export const LEAD_STAGE_PROGRESSION_ORDER: LeadStatus[] = [
   'New',
   'Contacted',
   'Interested',
@@ -80,27 +81,26 @@ export const LEAD_TO_ADMISSION_FLOW: LeadStatus[] = [
   'Admitted',
 ];
 
-export const LEAD_STAGE_PROGRESSION_ORDER = LEAD_TO_ADMISSION_FLOW;
 
 export function advanceLeadToNextStage(currentStatus: LeadStatus): LeadStatus {
   const normalized: LeadStatus = currentStatus === 'Pending' ? 'New' : currentStatus;
-  const idx = LEAD_TO_ADMISSION_FLOW.indexOf(normalized);
+  const idx = LEAD_STAGE_PROGRESSION_ORDER.indexOf(normalized);
   if (idx === -1) {
     return normalized === 'Not Now' || normalized === 'Rejected' ? 'Contacted' : 'Admitted';
   }
-  if (idx >= LEAD_TO_ADMISSION_FLOW.length - 1) {
+  if (idx >= LEAD_STAGE_PROGRESSION_ORDER.length - 1) {
     return 'Admitted';
   }
-  return LEAD_TO_ADMISSION_FLOW[idx + 1];
+  return LEAD_STAGE_PROGRESSION_ORDER[idx + 1];
 }
 
 export function getLeadStageProgressPercent(status: LeadStatus): number {
   const normalized: LeadStatus = status === 'Pending' ? 'New' : status;
   if (normalized === 'Enrolled' || normalized === 'Admitted') return 100;
   if (normalized === 'Not Now' || normalized === 'Rejected') return 15;
-  const idx = LEAD_TO_ADMISSION_FLOW.indexOf(normalized);
+  const idx = LEAD_STAGE_PROGRESSION_ORDER.indexOf(normalized);
   if (idx < 0) return 50;
-  return Math.round(((idx + 1) / LEAD_TO_ADMISSION_FLOW.length) * 100);
+  return Math.round(((idx + 1) / LEAD_STAGE_PROGRESSION_ORDER.length) * 100);
 }
 
 /**

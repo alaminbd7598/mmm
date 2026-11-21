@@ -288,13 +288,12 @@ export const AdminVirtualOfficeTab: React.FC = () => {
   // Keep the form in sync with the store while there are no unsaved edits.
   useEffect(() => {
     if (!dirty) setDraft(fillBlankCredentials(storeCfg, secureRef.current));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCfg]);
 
   const loadSecureConfig = async (announce: boolean) => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/admin/virtual-office', { headers: { 'X-MMM-Admin': '1' } });
+      const res = await fetch('/api/admin/virtual-office', { credentials: 'same-origin' });
       const data = (await res.json()) as { ok?: boolean; config?: VirtualOfficeConfig };
       if (!res.ok || !data.ok || !data.config) throw new Error('unavailable');
       if (!mountedRef.current) return;
@@ -327,7 +326,6 @@ export const AdminVirtualOfficeTab: React.FC = () => {
     return () => {
       mountedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const patch = (p: Partial<VirtualOfficeConfig>) => {

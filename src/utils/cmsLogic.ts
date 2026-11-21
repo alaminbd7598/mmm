@@ -21,11 +21,12 @@ import {
   ResourcePermission,
   RolePermissionMatrix,
   SeoMetaConfig,
-  SeoPageOverride,
   SiteSettings,
   TeacherLeaveRequest,
 } from '../types/cms';
 import { resolveVersionManagerConfig } from './versionLogic';
+import { isAllowedEmbedUrl, isSafeMediaUrl } from './safeUrl';
+import { isValidEmail, isValidPhone } from './contactValidation';
 
 export type AdminTabId =
   | 'overview'
@@ -61,12 +62,12 @@ export const ALL_ADMIN_TABS: { id: AdminTabId; label: string; category: string }
   { id: 'courses', label: 'Curriculum & Syllabus', category: 'Academics' },
   { id: 'notices', label: 'Notice Board Manager', category: 'Academics' },
   { id: 'events', label: 'Events & Seminars', category: 'Academics' },
-  { id: 'calendar', label: 'Institutional Academic Calendar (গুগল সিঙ্ক)', category: 'Academics' },
+  { id: 'calendar', label: 'Institutional Academic Calendar (একাডেমিক ক্যালেন্ডার)', category: 'Academics' },
   { id: 'madrasah-infographics', label: 'Madrasah Infographics & Transport', category: 'Academics' },
   { id: 'career', label: 'ক্যারিয়ার ও নিয়োগ ব্যবস্থাপনা (Career & Hiring)', category: 'HR & Faculty' },
   { id: 'leaves', label: 'Teacher Leave Management (ছুটি ব্যবস্থাপনা)', category: 'HR & Faculty' },
   { id: 'videos', label: 'মিডিয়া শোকেস (Media Showcase & Hifz Tree)', category: 'Website & Media' },
-  { id: 'blog', label: 'Blog & Articles Manager (ব্লগ ও API পब्लিশ)', category: 'Website & Media' },
+  { id: 'blog', label: 'Blog & Articles Manager (ব্লগ ও API পাবলিশ)', category: 'Website & Media' },
   { id: 'news', label: 'Scrolling News Ticker', category: 'Website & Media' },
   { id: 'emails', label: 'Email Notification Logs', category: 'Website & Media' },
   { id: 'ai-publisher', label: 'AI Smart Publishing Assistant (এআই পাবলিশার)', category: 'Administration' },
@@ -704,14 +705,6 @@ export function toBengaliDigits(value: number | string): string {
   return String(value).replace(/[0-9]/g, (d) => bengaliMap[d] || d);
 }
 
-/**
- * Formats a number in BDT with Bengali digits (e.g., ৳ ২,২০০).
- */
-export function formatBDT(amount: number): string {
-  const safe = Number.isFinite(amount) ? Math.round(amount) : 0;
-  return `৳ ${toBengaliDigits(safe.toLocaleString('en-IN'))}`;
-}
-
 export interface FeeCalculationInput {
   item: FeeStructureItem;
   apply25Discount: boolean;
@@ -869,7 +862,7 @@ export interface BotEvaluationResult {
 
 /**
  * Evaluates a user message sent to the "Noor" AI Assistant.
- * - Answers greetings and any question related to Craft International Institute (admission, fees,
+ * - Answers greetings and any question related to the madrasah (admission, fees,
  *   Hifz, academic classes, residential, day care, IT skills, curriculum, address, phone, documents).
  * - Strictly denies out-of-scope questions and returns the exact warning notice with remaining attempts.
  */
@@ -1020,8 +1013,6 @@ export function evaluateNoorBotQuery(
     '21023',
     'তাহফিজ',
     'tahfiz',
-    'ক্রাফট',
-    'craft',
     'প্রতিষ্ঠান',
     'ডকুমেন্ট',
     'কাগজপত্র',
@@ -1650,7 +1641,7 @@ export function validateInquiryInput(
       ),
     };
   }
-  if (!input.phone || input.phone.trim().length < 6) {
+  if (!input.phone || !isValidPhone(input.phone)) {
     return {
       valid: false,
       error: tr(
@@ -1660,7 +1651,7 @@ export function validateInquiryInput(
       ),
     };
   }
-  if (!input.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) {
+  if (!input.email || !isValidEmail(input.email.trim())) {
     return {
       valid: false,
       error: tr(
@@ -1687,12 +1678,27 @@ export function validateInquiryInput(
  * Converts any YouTube (watch, embed, shorts, youtu.be) OR Facebook (reel, watch, share/v, share/r, video)
  * URL into a clean, auto-playing embeddable URL with vertical/horizontal orientation detection.
  */
-export function getYouTubeEmbedUrl(rawUrl: string): {
+export function getYouTubeEmbedUrl(rawUrl: string): ParsedVideoUrl {
+  const parsed = parseVideoUrl(rawUrl);
+  if (!parsed.embedUrl) return parsed;
+  // Only the known embed providers may be framed; direct media files must be http(s) or same-site.
+  const playable =
+    parsed.platform === 'direct' && DIRECT_VIDEO_FILE_RE.test(parsed.embedUrl)
+      ? isSafeMediaUrl(parsed.embedUrl)
+      : isAllowedEmbedUrl(parsed.embedUrl);
+  return playable ? parsed : { embedUrl: '', videoId: null, isVerticalShort: false, platform: 'direct' };
+}
+
+export const DIRECT_VIDEO_FILE_RE = /\.(mp4|webm|ogg)(\?|$)/i;
+
+interface ParsedVideoUrl {
   embedUrl: string;
   videoId: string | null;
   isVerticalShort: boolean;
   platform: 'youtube' | 'facebook' | 'direct';
-} {
+}
+
+function parseVideoUrl(rawUrl: string): ParsedVideoUrl {
   const trimmed = (rawUrl || '').trim();
   if (!trimmed) {
     return { embedUrl: '', videoId: null, isVerticalShort: false, platform: 'direct' };
@@ -2495,16 +2501,30 @@ export function enableAllPublicSections(settings: SiteSettings): SiteSettings {
 }
 
 /**
- * Deeply merges a partial or full CMSState (from localStorage, live server /api/cms-state, or JSON backup)
+ * Deeply merges a partial or full CMSState (from the public cache, GET /api/state, or a JSON backup)
  * with fallbackState so all 5 roles, RBAC permissions, stored logos, and infographics are preserved.
  */
+export interface MergeCMSStateOptions {
+  /**
+   * True when `rawCandidate` is the stored state itself (a server response): its lists are used
+   * exactly as they are, even when empty or shorter than the built-in defaults. False (default)
+   * for seed content and imported backups, where an empty or missing list means "use the default".
+   */
+  authoritative?: boolean;
+}
+
 export function mergeLiveCMSState(
   rawCandidate: Record<string, unknown> | Partial<CMSState> | null | undefined,
-  fallbackState: CMSState
+  fallbackState: CMSState,
+  options: MergeCMSStateOptions = {}
 ): CMSState {
   if (!rawCandidate || typeof rawCandidate !== 'object') {
     return fallbackState;
   }
+  const authoritative = options.authoritative === true;
+  /** The incoming list, unless it is missing (or, for non-authoritative sources, empty). */
+  const list = <T, F extends T[] | undefined>(incoming: T[] | null | undefined, fallback: F): T[] | F =>
+    Array.isArray(incoming) && (authoritative || incoming.length > 0) ? incoming : fallback;
   const parsed = rawCandidate as Partial<CMSState> & Record<string, unknown>;
   const incomingSettings =
     parsed.settings && typeof parsed.settings === 'object'
@@ -2515,9 +2535,13 @@ export function mergeLiveCMSState(
     ? incomingSettings.storedLogos
     : [];
   const mergedLogos = [...savedLogos];
-  for (const preset of fallbackState.settings.storedLogos || []) {
-    if (!mergedLogos.some((l) => l.url === preset.url)) {
-      mergedLogos.push(preset);
+  // Stored state keeps exactly its own logo vault (a removed preset stays removed); backups and
+  // seed content are topped up with the built-in presets.
+  if (!authoritative || !Array.isArray(incomingSettings.storedLogos)) {
+    for (const preset of fallbackState.settings.storedLogos || []) {
+      if (!mergedLogos.some((l) => l.url === preset.url)) {
+        mergedLogos.push(preset);
+      }
     }
   }
 
@@ -2529,19 +2553,13 @@ export function mergeLiveCMSState(
   };
 
   const rawDeptVideos =
-    Array.isArray(parsed.departmentVideos) && parsed.departmentVideos.length
-      ? parsed.departmentVideos
-      : fallbackState.departmentVideos;
+    list(parsed.departmentVideos, fallbackState.departmentVideos);
 
   const rawActivityVideos =
-    Array.isArray(parsed.activityVideos) && parsed.activityVideos.length
-      ? parsed.activityVideos
-      : fallbackState.activityVideos;
+    list(parsed.activityVideos, fallbackState.activityVideos);
 
   const rawGuardianReels =
-    Array.isArray(parsed.guardianReels) && parsed.guardianReels.length
-      ? parsed.guardianReels
-      : fallbackState.guardianReels;
+    list(parsed.guardianReels, fallbackState.guardianReels);
 
   return {
     ...fallbackState,
@@ -2551,18 +2569,15 @@ export function mergeLiveCMSState(
       ...incomingSettings,
       heroVideoUrl: sanitizeVideoUrl(incomingSettings.heroVideoUrl ?? fallbackState.settings.heroVideoUrl),
       storedLogos: mergedLogos,
-      externalPortals:
-        Array.isArray(incomingSettings.externalPortals) && incomingSettings.externalPortals.length > 0
-          ? incomingSettings.externalPortals
-          : fallbackState.settings.externalPortals,
+      externalPortals: list(incomingSettings.externalPortals, fallbackState.settings.externalPortals),
       seoConfig: {
         ...DEFAULT_SEO_META_CONFIG,
         ...(fallbackState.settings.seoConfig || {}),
         ...(incomingSettings.seoConfig || {}),
-        pageOverrides:
-          incomingSettings.seoConfig?.pageOverrides && incomingSettings.seoConfig.pageOverrides.length
-            ? incomingSettings.seoConfig.pageOverrides
-            : fallbackState.settings.seoConfig?.pageOverrides || DEFAULT_SEO_META_CONFIG.pageOverrides,
+        pageOverrides: list(
+          incomingSettings.seoConfig?.pageOverrides,
+          fallbackState.settings.seoConfig?.pageOverrides || DEFAULT_SEO_META_CONFIG.pageOverrides
+        ),
       },
     },
     popupConfig: {
@@ -2572,26 +2587,18 @@ export function mergeLiveCMSState(
     aiBotConfig: {
       ...fallbackState.aiBotConfig,
       ...(parsed.aiBotConfig || {}),
-      suggestedQuestions: parsed.aiBotConfig?.suggestedQuestions?.length
-        ? parsed.aiBotConfig.suggestedQuestions
-        : fallbackState.aiBotConfig.suggestedQuestions,
-      qaItems: parsed.aiBotConfig?.qaItems?.length
-        ? parsed.aiBotConfig.qaItems
-        : fallbackState.aiBotConfig.qaItems,
+      suggestedQuestions: list(parsed.aiBotConfig?.suggestedQuestions, fallbackState.aiBotConfig.suggestedQuestions),
+      qaItems: list(parsed.aiBotConfig?.qaItems, fallbackState.aiBotConfig.qaItems),
     },
     whatsappConfig: {
       ...fallbackState.whatsappConfig,
       ...(parsed.whatsappConfig || {}),
-      quickTopics: parsed.whatsappConfig?.quickTopics?.length
-        ? parsed.whatsappConfig.quickTopics
-        : fallbackState.whatsappConfig.quickTopics,
+      quickTopics: list(parsed.whatsappConfig?.quickTopics, fallbackState.whatsappConfig.quickTopics),
     },
     feeCalculatorConfig: {
       ...fallbackState.feeCalculatorConfig,
       ...(parsed.feeCalculatorConfig || {}),
-      items: parsed.feeCalculatorConfig?.items?.length
-        ? parsed.feeCalculatorConfig.items
-        : fallbackState.feeCalculatorConfig.items,
+      items: list(parsed.feeCalculatorConfig?.items, fallbackState.feeCalculatorConfig.items),
     },
     campusVideo: {
       ...mergedCampusVideo,
@@ -2625,6 +2632,7 @@ export function mergeLiveCMSState(
           role: normalizeAdminRole(u.role),
         })
       );
+      if (authoritative && Array.isArray(parsed.users)) return existing;
       const merged = [...existing];
       for (const seedUser of fallbackState.users) {
         if (!merged.some((u) => u.username === seedUser.username || u.role === seedUser.role)) {
@@ -2655,41 +2663,25 @@ export function mergeLiveCMSState(
         ...(parsedRbac['Content Managers'] || parsedRbac['Content Manager'] || {}),
       },
     } as RolePermissionMatrix,
-    leaveRequests: Array.isArray(parsed.leaveRequests) && parsed.leaveRequests.length
-      ? parsed.leaveRequests
-      : fallbackState.leaveRequests,
-    emails: Array.isArray(parsed.emails) && parsed.emails.length
-      ? parsed.emails
-      : fallbackState.emails,
+    leaveRequests: list(parsed.leaveRequests, fallbackState.leaveRequests),
+    emails: list(parsed.emails, fallbackState.emails),
     educationMethodConfig: {
       ...fallbackState.educationMethodConfig,
       ...(parsed.educationMethodConfig || {}),
-      stages: parsed.educationMethodConfig?.stages?.length
-        ? parsed.educationMethodConfig.stages
-        : fallbackState.educationMethodConfig.stages,
+      stages: list(parsed.educationMethodConfig?.stages, fallbackState.educationMethodConfig.stages),
     },
     tenYearPlanConfig: {
       ...fallbackState.tenYearPlanConfig,
       ...(parsed.tenYearPlanConfig || {}),
-      stageBanners: parsed.tenYearPlanConfig?.stageBanners?.length
-        ? parsed.tenYearPlanConfig.stageBanners
-        : fallbackState.tenYearPlanConfig.stageBanners,
-      classColumns: parsed.tenYearPlanConfig?.classColumns?.length
-        ? parsed.tenYearPlanConfig.classColumns
-        : fallbackState.tenYearPlanConfig.classColumns,
-      tracks: parsed.tenYearPlanConfig?.tracks?.length
-        ? parsed.tenYearPlanConfig.tracks
-        : fallbackState.tenYearPlanConfig.tracks,
+      stageBanners: list(parsed.tenYearPlanConfig?.stageBanners, fallbackState.tenYearPlanConfig.stageBanners),
+      classColumns: list(parsed.tenYearPlanConfig?.classColumns, fallbackState.tenYearPlanConfig.classColumns),
+      tracks: list(parsed.tenYearPlanConfig?.tracks, fallbackState.tenYearPlanConfig.tracks),
     },
     dayCareRoutineConfig: {
       ...fallbackState.dayCareRoutineConfig,
       ...(parsed.dayCareRoutineConfig || {}),
-      periods: parsed.dayCareRoutineConfig?.periods?.length
-        ? parsed.dayCareRoutineConfig.periods
-        : fallbackState.dayCareRoutineConfig.periods,
-      durationBars: parsed.dayCareRoutineConfig?.durationBars?.length
-        ? parsed.dayCareRoutineConfig.durationBars
-        : fallbackState.dayCareRoutineConfig.durationBars,
+      periods: list(parsed.dayCareRoutineConfig?.periods, fallbackState.dayCareRoutineConfig.periods),
+      durationBars: list(parsed.dayCareRoutineConfig?.durationBars, fallbackState.dayCareRoutineConfig.durationBars),
     },
     transportConfig: {
       ...fallbackState.transportConfig,
@@ -2699,25 +2691,15 @@ export function mergeLiveCMSState(
         parsed.transportConfig.vehicleImageUrl.endsWith('/transport_van.png')
           ? '/assets/maharat/transport-van.png'
           : parsed.transportConfig?.vehicleImageUrl || fallbackState.transportConfig.vehicleImageUrl,
-      routes: parsed.transportConfig?.routes?.length
-        ? parsed.transportConfig.routes
-        : fallbackState.transportConfig.routes,
-      landmarks: parsed.transportConfig?.landmarks?.length
-        ? parsed.transportConfig.landmarks
-        : fallbackState.transportConfig.landmarks,
+      routes: list(parsed.transportConfig?.routes, fallbackState.transportConfig.routes),
+      landmarks: list(parsed.transportConfig?.landmarks, fallbackState.transportConfig.landmarks),
     },
     admissionExtraConfig: {
       ...fallbackState.admissionExtraConfig,
       ...(parsed.admissionExtraConfig || {}),
-      feeComparisonRows: parsed.admissionExtraConfig?.feeComparisonRows?.length
-        ? parsed.admissionExtraConfig.feeComparisonRows
-        : fallbackState.admissionExtraConfig.feeComparisonRows,
-      ageEligibilityList: parsed.admissionExtraConfig?.ageEligibilityList?.length
-        ? parsed.admissionExtraConfig.ageEligibilityList
-        : fallbackState.admissionExtraConfig.ageEligibilityList,
-      requiredDocumentsBn: parsed.admissionExtraConfig?.requiredDocumentsBn?.length
-        ? parsed.admissionExtraConfig.requiredDocumentsBn
-        : fallbackState.admissionExtraConfig.requiredDocumentsBn,
+      feeComparisonRows: list(parsed.admissionExtraConfig?.feeComparisonRows, fallbackState.admissionExtraConfig.feeComparisonRows),
+      ageEligibilityList: list(parsed.admissionExtraConfig?.ageEligibilityList, fallbackState.admissionExtraConfig.ageEligibilityList),
+      requiredDocumentsBn: list(parsed.admissionExtraConfig?.requiredDocumentsBn, fallbackState.admissionExtraConfig.requiredDocumentsBn),
     },
     uniformConfig: {
       ...fallbackState.uniformConfig,
@@ -2730,45 +2712,35 @@ export function mergeLiveCMSState(
     hifzTreeConfig: {
       ...fallbackState.hifzTreeConfig,
       ...(parsed.hifzTreeConfig || {}),
-      totalHuffazCount: Math.max(
-        Number(parsed.hifzTreeConfig?.totalHuffazCount || 0),
-        fallbackState.hifzTreeConfig.totalHuffazCount
-      ),
+      // Stored data is authoritative: a graduate removed in the admin panel stays removed. Only
+      // old backups / seed content (non-authoritative) are topped up from the built-in list.
+      totalHuffazCount:
+        authoritative && Number.isFinite(Number(parsed.hifzTreeConfig?.totalHuffazCount))
+          ? Number(parsed.hifzTreeConfig?.totalHuffazCount)
+          : Math.max(Number(parsed.hifzTreeConfig?.totalHuffazCount || 0), fallbackState.hifzTreeConfig.totalHuffazCount),
       graduates:
         Array.isArray(parsed.hifzTreeConfig?.graduates) &&
-        parsed.hifzTreeConfig.graduates.length >= fallbackState.hifzTreeConfig.graduates.length
+        (authoritative || parsed.hifzTreeConfig.graduates.length >= fallbackState.hifzTreeConfig.graduates.length)
           ? parsed.hifzTreeConfig.graduates
           : fallbackState.hifzTreeConfig.graduates,
     },
     photoGallery:
-      Array.isArray(parsed.photoGallery) && parsed.photoGallery.length
-        ? parsed.photoGallery
-        : fallbackState.photoGallery,
-    complaints: Array.isArray(parsed.complaints) && parsed.complaints.length
-      ? parsed.complaints
-      : fallbackState.complaints,
+      list(parsed.photoGallery, fallbackState.photoGallery),
+    complaints: list(parsed.complaints, fallbackState.complaints),
     versionManager: resolveVersionManagerConfig(
       parsed.versionManager ?? fallbackState.versionManager
     ),
     careerJobs:
-      Array.isArray(parsed.careerJobs) && parsed.careerJobs.length
-        ? parsed.careerJobs
-        : fallbackState.careerJobs || [],
+      list(parsed.careerJobs, fallbackState.careerJobs || []),
     careerApplications:
-      Array.isArray(parsed.careerApplications) && parsed.careerApplications.length
-        ? parsed.careerApplications
-        : fallbackState.careerApplications || [],
+      list(parsed.careerApplications, fallbackState.careerApplications || []),
     careerCandidates: Array.isArray(parsed.careerCandidates)
       ? parsed.careerCandidates
       : fallbackState.careerCandidates || [],
     admissionTokens2027:
-      Array.isArray(parsed.admissionTokens2027) && parsed.admissionTokens2027.length
-        ? parsed.admissionTokens2027
-        : fallbackState.admissionTokens2027 || [],
+      list(parsed.admissionTokens2027, fallbackState.admissionTokens2027 || []),
     blogPosts:
-      Array.isArray(parsed.blogPosts) && parsed.blogPosts.length
-        ? parsed.blogPosts
-        : fallbackState.blogPosts || [],
+      list(parsed.blogPosts, fallbackState.blogPosts || []),
     blogAutomationConfig: {
       ...(fallbackState.blogAutomationConfig || {
         enabled: true,
@@ -2779,27 +2751,24 @@ export function mergeLiveCMSState(
       ...(parsed.blogAutomationConfig || {}),
     },
     calendarEvents:
-      Array.isArray(parsed.calendarEvents) && parsed.calendarEvents.length
-        ? parsed.calendarEvents
-        : fallbackState.calendarEvents || [],
-    mobileBottomBar: parsed.mobileBottomBar?.slots?.length
-      ? parsed.mobileBottomBar
-      : fallbackState.mobileBottomBar,
+      list(parsed.calendarEvents, fallbackState.calendarEvents || []),
+    mobileBottomBar:
+      parsed.mobileBottomBar && Array.isArray(parsed.mobileBottomBar.slots) && (authoritative || parsed.mobileBottomBar.slots.length > 0)
+        ? parsed.mobileBottomBar
+        : fallbackState.mobileBottomBar,
     virtualOfficeConfig: parsed.virtualOfficeConfig
       ? {
           ...(fallbackState.virtualOfficeConfig || parsed.virtualOfficeConfig),
           ...parsed.virtualOfficeConfig,
           desks:
-            Array.isArray(parsed.virtualOfficeConfig.desks) &&
-            parsed.virtualOfficeConfig.desks.length
+            // The desk list always falls back to the defaults when empty (the server does the same).
+            Array.isArray(parsed.virtualOfficeConfig.desks) && parsed.virtualOfficeConfig.desks.length
               ? parsed.virtualOfficeConfig.desks
               : fallbackState.virtualOfficeConfig?.desks || [],
         }
       : fallbackState.virtualOfficeConfig,
     virtualOfficeSessions:
-      Array.isArray(parsed.virtualOfficeSessions) && parsed.virtualOfficeSessions.length
-        ? parsed.virtualOfficeSessions
-        : fallbackState.virtualOfficeSessions || [],
+      list(parsed.virtualOfficeSessions, fallbackState.virtualOfficeSessions || []),
   };
 }
 
@@ -3118,332 +3087,3 @@ export const DEFAULT_SEO_META_CONFIG: SeoMetaConfig = {
   ],
   updatedAt: '2026-11-10',
 };
-
-export interface ResolvedSeoMeta {
-  documentTitle: string;
-  metaDescription: string;
-  metaKeywords: string;
-  ogTitle: string;
-  ogDescription: string;
-  ogImageUrl: string;
-  ogSiteName: string;
-  ogType: 'website' | 'article' | 'profile';
-  twitterCard: 'summary_large_image' | 'summary';
-  twitterHandle: string;
-  canonicalUrl: string;
-  robotsDirective: string;
-  enableJsonLdSchema: boolean;
-  jsonLdObject: Record<string, unknown>;
-}
-
-/**
- * Resolves the active SEO and Open Graph metadata for a given route path,
- * merging global SeoMetaConfig with any route-specific override.
- */
-export function resolveEffectiveSeoMeta(
-  settings: SiteSettings,
-  currentPath: string = '/'
-): ResolvedSeoMeta {
-  const seo: SeoMetaConfig = {
-    ...DEFAULT_SEO_META_CONFIG,
-    ...(settings?.seoConfig || {}),
-  };
-
-  const normalizedPath = !currentPath || currentPath === '/admin' ? '/' : currentPath;
-  const routeOverride: SeoPageOverride | undefined = (seo.pageOverrides || []).find(
-    (p) => p.routePath === normalizedPath
-  );
-
-  const isHomeRoute = normalizedPath === '/';
-  const documentTitle =
-    (!isHomeRoute && routeOverride?.title?.trim()) ||
-    seo.documentTitle?.trim() ||
-    routeOverride?.title?.trim() ||
-    `${settings.instituteNameBn} | ${settings.instituteName}`;
-
-  const metaDescription =
-    (!isHomeRoute && routeOverride?.metaDescription?.trim()) ||
-    seo.metaDescription?.trim() ||
-    routeOverride?.metaDescription?.trim() ||
-    settings.heroSubtitle ||
-    settings.tagline;
-
-  const ogTitle = seo.syncOgWithMeta
-    ? documentTitle
-    : (!isHomeRoute && routeOverride?.ogTitle?.trim()) ||
-      seo.ogTitle?.trim() ||
-      documentTitle;
-
-  const ogDescription = seo.syncOgWithMeta
-    ? metaDescription
-    : (!isHomeRoute && routeOverride?.ogDescription?.trim()) ||
-      seo.ogDescription?.trim() ||
-      metaDescription;
-
-  const ogImageUrl =
-    (!isHomeRoute && routeOverride?.ogImageUrl?.trim()) ||
-    seo.ogImageUrl?.trim() ||
-    settings.heroBannerUrl ||
-    '/assets/maharat/fb/fb-media-3.jpg';
-
-  const baseOrigin =
-    seo.canonicalBaseUrl?.trim().replace(/\/+$/, '') ||
-    (typeof window !== 'undefined' ? window.location.origin : 'https://maharatmodelmadrasah.edu.bd');
-  const canonicalUrl = `${baseOrigin}${normalizedPath === '/' ? '' : normalizedPath}`;
-
-  const jsonLdObject: Record<string, unknown> = {
-    '@context': 'https://schema.org',
-    '@type': 'EducationalOrganization',
-    name: settings.instituteName || 'Maharat Model Madrasah',
-    alternateName: [
-      settings.instituteNameBn || 'মাহারাত মডেল মাদ্রাসা',
-      settings.instituteNameAr || 'مدرسة المهارات النموذجية',
-    ],
-    identifier: settings.eiinNumber ? `EIIN: ${settings.eiinNumber}` : 'EIIN: 140630',
-    description: metaDescription,
-    url: canonicalUrl,
-    logo: settings.logoUrl || '/assets/maharat/01-Branding_Logo-with-EIIN_02.svg',
-    image: ogImageUrl,
-    telephone: settings.phonePrimary || '01886-340308',
-    email: settings.email || 'maharatmodelmadrasah2022@gmail.com',
-    address: {
-      '@type': 'PostalAddress',
-      streetAddress:
-        settings.addressEn ||
-        'Main Office & Girls Campus: House#07, Road#17/A, Sector#12, Uttara, Dhaka-1230',
-      addressLocality: 'Uttara, Dhaka',
-      postalCode: '1230',
-      addressCountry: 'BD',
-    },
-    sameAs: [settings.facebookUrl, settings.youtubeUrl].filter(Boolean),
-  };
-
-  return {
-    documentTitle,
-    metaDescription,
-    metaKeywords: seo.metaKeywords || DEFAULT_SEO_META_CONFIG.metaKeywords,
-    ogTitle,
-    ogDescription,
-    ogImageUrl,
-    ogSiteName: seo.ogSiteName || `${settings.instituteNameBn} | ${settings.instituteName}`,
-    ogType: seo.ogType || 'website',
-    twitterCard: seo.twitterCard || 'summary_large_image',
-    twitterHandle: seo.twitterHandle || '@maharatmadrasah',
-    canonicalUrl,
-    robotsDirective: seo.robotsDirective || 'index, follow',
-    enableJsonLdSchema: seo.enableJsonLdSchema !== false,
-    jsonLdObject,
-  };
-}
-
-export interface SeoHealthCheckItem {
-  id: string;
-  labelBn: string;
-  labelEn: string;
-  passed: boolean;
-  detailBn: string;
-  detailEn: string;
-}
-
-export interface SeoHealthReport {
-  score: number;
-  status: 'optimal' | 'good' | 'needs-attention';
-  checks: SeoHealthCheckItem[];
-}
-
-/**
- * Pure SEO & OpenGraph quality analyzer that evaluates character lengths,
- * Open Graph social completeness, keywords, indexing rules, and JSON-LD structured data.
- */
-export function evaluateSeoHealth(seoInput?: Partial<SeoMetaConfig>): SeoHealthReport {
-  const seo: SeoMetaConfig = {
-    ...DEFAULT_SEO_META_CONFIG,
-    ...(seoInput || {}),
-  };
-
-  const titleLen = (seo.documentTitle || '').trim().length;
-  const descLen = (seo.metaDescription || '').trim().length;
-  const ogTitleText = seo.syncOgWithMeta ? seo.documentTitle : seo.ogTitle;
-  const ogDescText = seo.syncOgWithMeta ? seo.metaDescription : seo.ogDescription;
-  const hasOgMeta = Boolean(ogTitleText?.trim() && ogDescText?.trim());
-  const hasOgImage = Boolean(seo.ogImageUrl?.trim());
-  const keywordCount = (seo.metaKeywords || '')
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean).length;
-  const isIndexable = (seo.robotsDirective || 'index, follow').startsWith('index');
-
-  const checks: SeoHealthCheckItem[] = [
-    {
-      id: 'title-length',
-      labelBn: 'ডকুমেন্ট টাইটেল (<title>) দৈর্ঘ্য',
-      labelEn: 'Document Title (<title>) Length',
-      passed: titleLen >= 20 && titleLen <= 75,
-      detailBn: `${titleLen} ক্যারেক্টার (আদর্শ: ২৫–৭০ ক্যারেক্টার)`,
-      detailEn: `${titleLen} chars (Recommended: 25–70 chars)`,
-    },
-    {
-      id: 'description-length',
-      labelBn: 'মেটা ডেসক্রিপশন (Meta Description) দৈর্ঘ্য',
-      labelEn: 'Meta Description Length',
-      passed: descLen >= 80 && descLen <= 260,
-      detailBn: `${descLen} ক্যারেক্টার (আদর্শ: ১০০–২২০ ক্যারেক্টার)`,
-      detailEn: `${descLen} chars (Recommended: 100–220 chars)`,
-    },
-    {
-      id: 'og-tags',
-      labelBn: 'ওপেন গ্রাফ টাইটেল ও ডেসক্রিপশন (og:title & og:description)',
-      labelEn: 'Open Graph Title & Description',
-      passed: hasOgMeta,
-      detailBn: hasOgMeta ? 'ফেসবুক ও হোয়াটসঅ্যাপ শেয়ারিংয়ের জন্য প্রস্তুত' : 'ওপেন গ্রাফ তথ্য অসম্পূর্ণ',
-      detailEn: hasOgMeta ? 'Configured for rich social sharing' : 'Missing Open Graph title or description',
-    },
-    {
-      id: 'og-image',
-      labelBn: 'সোশ্যাল শেয়ার প্রিভিউ ইমেজ (og:image)',
-      labelEn: 'Social Share Preview Image (og:image)',
-      passed: hasOgImage,
-      detailBn: hasOgImage ? seo.ogImageUrl : 'কোনো সোশ্যাল প্রিভিউ ছবি যুক্ত করা হয়নি',
-      detailEn: hasOgImage ? seo.ogImageUrl : 'No Open Graph preview image set',
-    },
-    {
-      id: 'keywords-robots',
-      labelBn: 'সার্চ কিওয়ার্ড ও গুগল ইনডেক্সিং (Robots & Keywords)',
-      labelEn: 'Search Keywords & Robots Indexing',
-      passed: keywordCount >= 3 && isIndexable,
-      detailBn: `${keywordCount}টি কিওয়ার্ড • ${seo.robotsDirective}`,
-      detailEn: `${keywordCount} keywords • ${seo.robotsDirective}`,
-    },
-    {
-      id: 'json-ld',
-      labelBn: 'Schema.org স্ট্রাকচার্ড ডাটা (JSON-LD EducationalOrganization)',
-      labelEn: 'Schema.org Structured Data (JSON-LD)',
-      passed: seo.enableJsonLdSchema !== false,
-      detailBn: seo.enableJsonLdSchema !== false ? 'সক্রিয় (Rich Snippet Ready)' : 'নিষ্ক্রিয়',
-      detailEn: seo.enableJsonLdSchema !== false ? 'Active (Rich Snippet Ready)' : 'Disabled',
-    },
-  ];
-
-  const passedCount = checks.filter((c) => c.passed).length;
-  const score = Math.round((passedCount / checks.length) * 100);
-  const status = score >= 85 ? 'optimal' : score >= 60 ? 'good' : 'needs-attention';
-
-  return { score, status, checks };
-}
-
-/**
- * Generates the formatted HTML <head> snippet for the active SEO & Open Graph configuration.
- */
-export function buildSeoHeadHtmlSnippet(
-  settings: SiteSettings,
-  currentPath: string = '/'
-): string {
-  const resolved = resolveEffectiveSeoMeta(settings, currentPath);
-  const lines = [
-    `<title>${resolved.documentTitle}</title>`,
-    `<meta name="description" content="${resolved.metaDescription}" />`,
-    `<meta name="keywords" content="${resolved.metaKeywords}" />`,
-    `<meta name="robots" content="${resolved.robotsDirective}" />`,
-    `<link rel="canonical" href="${resolved.canonicalUrl}" />`,
-    `<!-- Open Graph / Facebook / WhatsApp -->`,
-    `<meta property="og:type" content="${resolved.ogType}" />`,
-    `<meta property="og:site_name" content="${resolved.ogSiteName}" />`,
-    `<meta property="og:title" content="${resolved.ogTitle}" />`,
-    `<meta property="og:description" content="${resolved.ogDescription}" />`,
-    `<meta property="og:image" content="${resolved.ogImageUrl}" />`,
-    `<meta property="og:url" content="${resolved.canonicalUrl}" />`,
-    `<!-- Twitter / X Card -->`,
-    `<meta name="twitter:card" content="${resolved.twitterCard}" />`,
-    `<meta name="twitter:title" content="${resolved.ogTitle}" />`,
-    `<meta name="twitter:description" content="${resolved.ogDescription}" />`,
-    `<meta name="twitter:image" content="${resolved.ogImageUrl}" />`,
-  ];
-
-  if (resolved.enableJsonLdSchema) {
-    lines.push(
-      `<!-- Schema.org EducationalOrganization JSON-LD -->`,
-      `<script type="application/ld+json">`,
-      JSON.stringify(resolved.jsonLdObject, null, 2),
-      `</script>`
-    );
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Dynamically synchronizes the live browser Document `<head>` (`document.title`,
- * `<meta name="description">`, Open Graph `og:*` tags, Twitter `twitter:*` tags,
- * `<link rel="canonical">`, and Schema.org JSON-LD script) with the CMS `SiteSettings`.
- */
-export function applySeoMetaToDocument(
-  settings: SiteSettings,
-  currentPath?: string,
-  doc?: Document
-): ResolvedSeoMeta {
-  const activePath =
-    currentPath ?? (typeof window !== 'undefined' ? window.location.pathname : '/');
-  const resolved = resolveEffectiveSeoMeta(settings, activePath);
-  const targetDoc = doc ?? (typeof document !== 'undefined' ? document : undefined);
-
-  if (!targetDoc) {
-    return resolved;
-  }
-
-  targetDoc.title = resolved.documentTitle;
-
-  const upsertMetaTag = (attrName: 'name' | 'property', attrValue: string, content: string) => {
-    let el = targetDoc.head.querySelector(`meta[${attrName}="${attrValue}"]`) as HTMLMetaElement | null;
-    if (!el) {
-      el = targetDoc.createElement('meta');
-      el.setAttribute(attrName, attrValue);
-      targetDoc.head.appendChild(el);
-    }
-    el.setAttribute('content', content);
-  };
-
-  upsertMetaTag('name', 'description', resolved.metaDescription);
-  upsertMetaTag('name', 'keywords', resolved.metaKeywords);
-  upsertMetaTag('name', 'robots', resolved.robotsDirective);
-
-  upsertMetaTag('property', 'og:title', resolved.ogTitle);
-  upsertMetaTag('property', 'og:description', resolved.ogDescription);
-  upsertMetaTag('property', 'og:image', resolved.ogImageUrl);
-  upsertMetaTag('property', 'og:site_name', resolved.ogSiteName);
-  upsertMetaTag('property', 'og:type', resolved.ogType);
-  upsertMetaTag('property', 'og:url', resolved.canonicalUrl);
-
-  upsertMetaTag('name', 'twitter:card', resolved.twitterCard);
-  upsertMetaTag('name', 'twitter:title', resolved.ogTitle);
-  upsertMetaTag('name', 'twitter:description', resolved.ogDescription);
-  upsertMetaTag('name', 'twitter:image', resolved.ogImageUrl);
-
-  // Canonical link
-  let canonicalEl = targetDoc.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
-  if (!canonicalEl) {
-    canonicalEl = targetDoc.createElement('link');
-    canonicalEl.setAttribute('rel', 'canonical');
-    targetDoc.head.appendChild(canonicalEl);
-  }
-  canonicalEl.setAttribute('href', resolved.canonicalUrl);
-
-  // JSON-LD Structured Data
-  const jsonLdScriptId = 'maharat-seo-jsonld';
-  let scriptEl = targetDoc.getElementById(jsonLdScriptId) as HTMLScriptElement | null;
-  if (resolved.enableJsonLdSchema) {
-    if (!scriptEl) {
-      scriptEl = targetDoc.createElement('script');
-      scriptEl.id = jsonLdScriptId;
-      scriptEl.type = 'application/ld+json';
-      targetDoc.head.appendChild(scriptEl);
-    }
-    scriptEl.textContent = JSON.stringify(resolved.jsonLdObject);
-  } else if (scriptEl) {
-    scriptEl.remove();
-  }
-
-  return resolved;
-}
-
-
-

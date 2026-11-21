@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
-export const THEME_STORAGE_KEY = 'craft_international_institute_theme';
+const THEME_STORAGE_KEY = 'maharat_model_madrasah_theme';
+/** Key used by earlier versions; still read so returning visitors keep their light / dark choice. */
+const LEGACY_THEME_STORAGE_KEY = 'craft_international_institute_theme';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -29,7 +31,10 @@ const applyThemeToDOM = (mode: ThemeMode) => {
 const getInitialTheme = (): ThemeMode => {
   if (typeof window === 'undefined') return 'light';
   try {
-    const saved = localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem('theme');
+    const saved =
+      localStorage.getItem(THEME_STORAGE_KEY) ||
+      localStorage.getItem(LEGACY_THEME_STORAGE_KEY) ||
+      localStorage.getItem('theme');
     if (saved === 'light' || saved === 'dark') {
       applyThemeToDOM(saved);
       return saved;

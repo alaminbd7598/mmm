@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppLanguage } from '../utils/translations';
-import { getYouTubeEmbedUrl, hasValidVideoUrl } from '../utils/cmsLogic';
+import { DIRECT_VIDEO_FILE_RE, getYouTubeEmbedUrl, hasValidVideoUrl } from '../utils/cmsLogic';
 import { localizeDigits } from '../utils/i18nContent';
 import { FramedPhotoModalData } from './HifzTreeAndGallerySection';
 
@@ -98,7 +98,7 @@ export const AppleCinemaVideoModal: React.FC<AppleCinemaVideoModalProps> = ({
   const hasPlayableUrl = video ? hasValidVideoUrl(video.videoUrl) : false;
   const parsedVideo = video && hasPlayableUrl ? getYouTubeEmbedUrl(video.videoUrl) : null;
   const isDirectVideoFile =
-    parsedVideo?.platform === 'direct' && /\.(mp4|webm|ogg)(\?|$)/i.test(parsedVideo.embedUrl);
+    parsedVideo?.platform === 'direct' && DIRECT_VIDEO_FILE_RE.test(parsedVideo.embedUrl);
 
   const containerMaxWidth =
     aspectMode === 'portrait'

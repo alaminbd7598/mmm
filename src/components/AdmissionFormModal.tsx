@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
+import { PhotoTooLargeError, photoFileToDataUrl } from '../utils/imageResize';
 import { AdmissionLead, DetailedAdmissionData } from '../types/cms';
 import { findMatchingLeadByPhone, normalizePhoneNumber } from '../utils/cmsLogic';
 
@@ -81,14 +82,16 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   initialCategory,
   inlineMode = false,
 }) => {
-  const { state, submitInquiry, language } = useCMS();
+  const { state, submitInquiry, language, publicSubmitError } = useCMS();
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
   const [step, setStep] = useState<number>(1);
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
   const [submittedEmailLogId, setSubmittedEmailLogId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [photoFileName, setPhotoFileName] = useState<string>('No file chosen');
+  const [photoError, setPhotoError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [studentEmail, setStudentEmail] = useState('applicant@maharatmadrasah.com');
@@ -207,16 +210,24 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
-    setPhotoFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        updateDetail('studentPhotoUrl', reader.result);
+    setPhotoError('');
+    // Large camera pictures are scaled down so the application is not refused for its size.
+    void photoFileToDataUrl(file).then(
+      (dataUrl) => {
+        setPhotoFileName(file.name);
+        updateDetail('studentPhotoUrl', dataUrl);
+      },
+      (err: unknown) => {
+        // A picture that is still above the server's limit is refused here, with the same
+        // message the server's refusal would produce, instead of failing at submission.
+        if (err instanceof PhotoTooLargeError) setPhotoError(publicSubmitError({ status: 413, code: 'TOO_LARGE' }));
+        // Let the visitor pick the same file again after shrinking it.
+        input.value = '';
       }
-    };
-    reader.readAsDataURL(file);
+    );
   };
 
   const handleDobChange = (dobValue: string) => {
@@ -387,7 +398,8 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
     setStep((prev) => Math.min(6, prev + 1));
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
+    if (isSubmitting) return;
     const finalName =
       details.studentNameBn && details.studentNameEn
         ? `${details.studentNameBn} (${details.studentNameEn})`
@@ -399,18 +411,27 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
         ? state.courses.find((c) => c.category === 'Hifzul Quran')?.id
         : state.courses.find((c) => c.category === 'Academic')?.id;
 
-    const emailLog = submitInquiry({
+    setIsSubmitting(true);
+    const result = await submitInquiry({
       name: finalName,
       phone: finalPhone,
-      email: studentEmail.trim() || 'applicant@craftinstitute.edu.bd',
+      email: studentEmail.trim() || 'online-admission@maharatmadrasah.com',
       courseId: matchedCourse || selectedCourseId || state.courses[0]?.id || 'course-prep-2',
       message: `বিভাগ: ${details.department} | শ্রেণি: ${details.targetClass} | ক্যাটাগরি: ${details.academicCategory} | সেশন: ${details.session}`,
       source: 'Full Admission Form',
       detailedData: details,
     });
 
-    setSubmittedEmailLogId(emailLog.id);
+    setIsSubmitting(false);
     setIsPreviewMode(false);
+    // The receipt is shown only once the server has stored the application; otherwise the form
+    // returns to its last step with the reason, keeping everything that was typed.
+    if (!result.ok) {
+      setErrorMsg(result.error);
+      return;
+    }
+    setErrorMsg('');
+    setSubmittedEmailLogId(result.leadId);
   };
 
   const handlePrintAdmissionReceipt = () => {
@@ -471,7 +492,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
 
   const formContent = (
     <div className="w-full max-w-5xl mx-auto space-y-6" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-      {/* Top Banner Card matching craftinternationalinstitute.com ভর্তি ফরম */}
+      {/* Top Banner Card */}
       <div className="relative rounded-3xl bg-gradient-to-br from-[#f3e7ff] via-[#e9d5ff] to-[#f5d0fe] dark:from-[#2e054e] dark:via-[#3b0764] dark:to-[#4c0575] border border-purple-200 dark:border-purple-700/50 shadow-xl overflow-hidden px-6 py-8 sm:px-10 sm:py-10 text-center">
         {/* Top Rainbow / Purple-Pink Accent Bar */}
         <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-[#ec4899] via-[#a855f7] to-[#6366f1]" />
@@ -810,7 +831,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
           </div>
         ) : (
           <>
-            {/* 6-Step Circular Icon Stepper matching craftinternationalinstitute.com */}
+            {/* 6-Step Circular Icon Stepper */}
             <div className="px-3 sm:px-6 pt-5 sm:pt-7 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="relative flex items-center justify-between max-w-3xl mx-auto overflow-x-auto no-scrollbar py-1">
                 {/* Connecting Background Line */}
@@ -995,6 +1016,11 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
                           {photoFileName}
                         </span>
                       </div>
+                      {photoError && (
+                        <p role="alert" data-testid="admission-photo-error" className="w-full text-left text-xs font-semibold text-rose-600 dark:text-rose-400">
+                          {photoError}
+                        </p>
+                      )}
 
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         অনুমোদিত ফরম্যাট: JPG, PNG (সর্বোচ্চ ২MB)

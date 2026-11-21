@@ -1,6 +1,6 @@
 import { AdmissionLead } from '../types/cms';
 
-export const exportRegistrationsToCSV = (leads: AdmissionLead[], filenamePrefix = 'craft_institute_registrations') => {
+export const exportRegistrationsToCSV = (leads: AdmissionLead[], filenamePrefix = 'maharat_madrasah_registrations') => {
   const headers = [
     'ক্রমিক (SL)',
     'আইডি (ID)',

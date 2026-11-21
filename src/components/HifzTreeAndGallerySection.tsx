@@ -10,18 +10,13 @@ import {
   Copy,
   Cpu,
   Download,
-  ExternalLink,
-  Eye,
-  FileBadge2,
   FileText,
   Filter,
   GitBranch,
   Globe,
-  GraduationCap,
   Image as ImageIcon,
   LayoutGrid,
   ListOrdered,
-  MapPin,
   Maximize2,
   Monitor,
   Plane,
@@ -31,12 +26,10 @@ import {
   Sparkles,
   Trophy,
   User,
-  Users,
   Video,
-  X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { HafizGraduateItem, PhotoGalleryCategory, PhotoGalleryItem } from '../types/cms';
+import { HafizGraduateItem, PhotoGalleryCategory } from '../types/cms';
 import {
   buildHafizSocialShareLinks,
   buildUnifiedMediaHubItems,
@@ -44,7 +37,6 @@ import {
   ExamScheduleItem,
   filterExamSchedules,
   filterHifzGraduates,
-  filterPhotoGallery,
   filterUnifiedMediaItems,
   toBengaliDigits,
   UnifiedMediaHubItem,

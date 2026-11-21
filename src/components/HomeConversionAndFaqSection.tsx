@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowRight,
@@ -18,14 +18,19 @@ import {
   Quote,
   Send,
   ShieldCheck,
-  Sparkles,
   Ticket,
   User,
   Users,
   Zap,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
-import { matchAdmissionTokenByContact } from '../utils/admissionToken2027Logic';
+import {
+  AdmissionTokenMatch,
+  MIN_TOKEN_MATCH_PHONE_DIGITS,
+  applyAdmissionToken,
+  countDigits,
+  matchAdmissionToken,
+} from '../lib/api/admission-token';
 import {
   filterHomeFaqByCategory,
   GENERAL_CLASS_OPTIONS,
@@ -36,6 +41,8 @@ import {
   validateQuickHomeRegistration,
 } from '../utils/homeConversionLogic';
 
+const TOKEN_MATCH_DEBOUNCE_MS = 400;
+
 interface HomeRegistrationSplitSectionProps {
   onOpenFullAdmission: () => void;
 }
@@ -43,7 +50,7 @@ interface HomeRegistrationSplitSectionProps {
 export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSectionProps> = ({
   onOpenFullAdmission,
 }) => {
-  const { language, submitInquiry, markAdmissionTokenApplied, state } = useCMS();
+  const { language, submitInquiry, state } = useCMS();
   const [studentName, setStudentName] = useState('');
   const [guardianName, setGuardianName] = useState('');
   const [mobile, setMobile] = useState('');
@@ -58,11 +65,40 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
   const [address, setAddress] = useState('');
   const [formError, setFormError] = useState('');
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
+  const submitBusyRef = useRef(false);
 
-  const matchedToken = matchAdmissionTokenByContact(state.admissionTokens2027, {
-    phone: mobile,
-    email: guardianEmail,
-  });
+  const [tokenMatch, setTokenMatch] = useState<AdmissionTokenMatch | null>(null);
+
+  // The guardian's own 2027 token is looked up on the server once the mobile number is complete.
+  useEffect(() => {
+    if (countDigits(mobile) < MIN_TOKEN_MATCH_PHONE_DIGITS) {
+      setTokenMatch(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void matchAdmissionToken(
+        { phone: mobile.trim(), email: guardianEmail.trim() || undefined },
+        controller.signal
+      ).then((res) => {
+        if (!controller.signal.aborted) setTokenMatch(res.ok ? res.data.match : null);
+      });
+    }, TOKEN_MATCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mobile, guardianEmail]);
+
+  const matchedToken = tokenMatch
+    ? {
+        id: tokenMatch.id,
+        tokenCode: tokenMatch.tokenCode,
+        studentName: tokenMatch.studentName,
+        classNameLabel: tokenMatch.classNameLabel,
+        ...tokenMatch.totals,
+      }
+    : null;
 
   const classOptions =
     department === 'General' ? GENERAL_CLASS_OPTIONS[language] : TAHFIZ_CLASS_OPTIONS[language];
@@ -183,7 +219,7 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
     },
   }[language];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validation = validateQuickHomeRegistration(
       {
@@ -227,7 +263,9 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
       .filter(Boolean)
       .join(' | ');
 
-    submitInquiry({
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
+    const result = await submitInquiry({
       name: `${studentName.trim()} (অভিভাবক: ${guardianName.trim()})`,
       phone: mobile.trim(),
       email: guardianEmail.trim() || 'online-registration@maharatmadrasah.com',
@@ -239,15 +277,19 @@ export const HomeRegistrationSplitSection: React.FC<HomeRegistrationSplitSection
       targetClass,
       preferredAccommodation: accommodation,
     });
-
-    if (matchedToken) {
-      markAdmissionTokenApplied(matchedToken.id);
+    submitBusyRef.current = false;
+    // The success card is shown only once the server has stored the registration.
+    if (!result.ok) {
+      setFormError(result.error);
+      return;
     }
 
-    const refId = matchedToken
-      ? `${matchedToken.tokenCode}`
-      : `MMM-${String(Math.floor(100000 + Math.random() * 900000))}`;
-    setSubmittedRef(refId);
+    if (matchedToken) {
+      void applyAdmissionToken(matchedToken.id, mobile.trim());
+    }
+
+    // The reference shown is one the office can look up: the token code or the stored lead id.
+    setSubmittedRef(matchedToken ? matchedToken.tokenCode : result.leadId);
   };
 
   const resetForm = () => {

@@ -1,35 +1,17 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   Calendar as CalendarIcon,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  CloudUpload,
   Download,
   ExternalLink,
   Plus,
   RefreshCw,
   Trash2,
-  X,
 } from 'lucide-react';
 import { useCMS } from '../store/useCMSStore';
 import type { InstitutionalCalendarCategory, InstitutionalCalendarEvent } from '../types/cms';
 import { buildIcsCalendarFile } from '../utils/admissionToken2027Logic';
-import {
-  deleteEventFromGoogleCalendar,
-  fetchGoogleCalendarEvents,
-  getConnectedGoogleUser,
-  getGoogleCalendarToken,
-  pushEventToGoogleCalendar,
-  signInWithGoogleWorkspace,
-} from '../lib/googleWorkspaceAuth';
-
-interface PendingConfirmAction {
-  type: 'push' | 'delete';
-  event: InstitutionalCalendarEvent;
-}
-
 const CATEGORY_STYLES: Record<
   InstitutionalCalendarCategory,
   { badge: string; dot: string; labelBn: string; labelEn: string }
@@ -71,9 +53,7 @@ export const AdminCalendarTab: React.FC = () => {
     state,
     language,
     addCalendarEvent,
-    updateCalendarEvent,
     deleteCalendarEvent,
-    mergeGoogleCalendarEvents,
     pushToast,
   } = useCMS();
 
@@ -83,10 +63,6 @@ export const AdminCalendarTab: React.FC = () => {
   const events = state.calendarEvents || [];
   const [viewDate, setViewDate] = useState(() => new Date());
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [googleEmail, setGoogleEmail] = useState<string>(
-    () => getConnectedGoogleUser()?.email || ''
-  );
-  const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
 
   // Add event form
   const [titleBn, setTitleBn] = useState('');
@@ -95,10 +71,6 @@ export const AdminCalendarTab: React.FC = () => {
   const [time, setTime] = useState('09:00');
   const [category, setCategory] = useState<InstitutionalCalendarCategory>('institutional');
   const [descriptionBn, setDescriptionBn] = useState('');
-
-  // Explicit Confirmation Modal before modifying user's Google Calendar (Mandatory Workspace Policy)
-  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirmAction | null>(null);
-  const [isExecutingGoogleWrite, setIsExecutingGoogleWrite] = useState(false);
 
   const combinedEvents = useMemo(() => {
     const leaveEvents: InstitutionalCalendarEvent[] = (state.leaveRequests || [])
@@ -146,55 +118,17 @@ export const AdminCalendarTab: React.FC = () => {
     return map;
   }, [filteredEvents]);
 
-  const handleConnectGoogle = async () => {
-    setIsSyncingGoogle(true);
-    try {
-      const session = await signInWithGoogleWorkspace();
-      setGoogleEmail(session.user.email);
-      const fetched = await fetchGoogleCalendarEvents(session.accessToken);
-      const added = mergeGoogleCalendarEvents(fetched);
-      pushToast(
-        tr('গুগল ক্যালেন্ডার যুক্ত হয়েছে!', 'Google Calendar Connected!', 'تم ربط تقويم Google!'),
-        tr(
-          `${session.user.email} থেকে ${added}টি নতুন ইভেন্ট/ছুটি সিঙ্ক হয়েছে।`,
-          `Synced ${added} new events & Bangladesh holidays from ${session.user.email}.`,
-          `تمت مزامنة ${added} حدثاً جديداً.`
-        )
-      );
-    } catch (err) {
-      pushToast(
-        tr('গুগল ক্যালেন্ডার সংযোগ ব্যর্থ', 'Google Calendar Connection Failed', 'فشل الاتصال بتقويم Google'),
-        err instanceof Error ? err.message : 'Unable to connect Google Calendar.',
-        'info'
-      );
-    } finally {
-      setIsSyncingGoogle(false);
-    }
-  };
-
-  const handleRefreshGoogleEvents = async () => {
-    const token = getGoogleCalendarToken();
-    if (!token) {
-      await handleConnectGoogle();
-      return;
-    }
-    setIsSyncingGoogle(true);
-    try {
-      const fetched = await fetchGoogleCalendarEvents(token);
-      const added = mergeGoogleCalendarEvents(fetched);
-      pushToast(
-        tr('গুগল ক্যালেন্ডার রিফ্রেশ সম্পন্ন', 'Google Calendar Refreshed', 'تم تحديث تقويم Google'),
-        tr(`${added}টি নতুন ইভেন্ট যুক্ত হয়েছে।`, `${added} new events imported.`, `تم استيراد ${added} حدثاً.`)
-      );
-    } catch (err) {
-      pushToast(
-        tr('রিফ্রেশ ব্যর্থ', 'Refresh Failed', 'فشل التحديث'),
-        err instanceof Error ? err.message : 'Please reconnect Google Calendar.',
-        'info'
-      );
-    } finally {
-      setIsSyncingGoogle(false);
-    }
+  // Google sign-in is disabled for this site, so the calendar cannot be linked to a Google account.
+  const handleConnectGoogle = () => {
+    pushToast(
+      tr('গুগল ক্যালেন্ডার সিঙ্ক বর্তমানে উপলব্ধ নয়', 'Google Calendar sync is not available', 'مزامنة تقويم Google غير متاحة حالياً'),
+      tr(
+        'অনুগ্রহ করে .ICS ফাইল ডাউনলোড করে আপনার গুগল ক্যালেন্ডারে ইমপোর্ট করুন।',
+        'Please download the .ICS file and import it into your Google Calendar.',
+        'يرجى تنزيل ملف ‎.ICS واستيراده إلى تقويم Google.'
+      ),
+      'info'
+    );
   };
 
   const handleAddEvent = (e: React.FormEvent) => {
@@ -212,65 +146,6 @@ export const AdminCalendarTab: React.FC = () => {
     setTitleBn('');
     setTitleEn('');
     setDescriptionBn('');
-  };
-
-  const handleConfirmGoogleAction = async () => {
-    if (!pendingConfirm) return;
-    let token = getGoogleCalendarToken();
-    if (!token) {
-      try {
-        const session = await signInWithGoogleWorkspace();
-        setGoogleEmail(session.user.email);
-        token = session.accessToken;
-      } catch (err) {
-        pushToast(
-          tr('গুগল অনুমোদন প্রয়োজন', 'Google Sign-In Required', 'مطلوب تسجيل الدخول'),
-          err instanceof Error ? err.message : 'Sign in failed.',
-          'info'
-        );
-        setPendingConfirm(null);
-        return;
-      }
-    }
-
-    setIsExecutingGoogleWrite(true);
-    try {
-      if (pendingConfirm.type === 'push') {
-        const res = await pushEventToGoogleCalendar(token, pendingConfirm.event);
-        updateCalendarEvent({
-          ...pendingConfirm.event,
-          googleEventId: res.id,
-          htmlLink: res.htmlLink,
-          source: 'google',
-        });
-        pushToast(
-          tr('গুগল ক্যালেন্ডারে যুক্ত হয়েছে', 'Synced to Google Calendar', 'تمت المزامنة مع Google'),
-          pendingConfirm.event.titleBn
-        );
-      } else if (pendingConfirm.type === 'delete' && pendingConfirm.event.googleEventId) {
-        await deleteEventFromGoogleCalendar(token, pendingConfirm.event.googleEventId);
-        updateCalendarEvent({
-          ...pendingConfirm.event,
-          googleEventId: undefined,
-          htmlLink: undefined,
-          source: 'local',
-        });
-        pushToast(
-          tr('গুগল ক্যালেন্ডার থেকে সরানো হয়েছে', 'Removed from Google Calendar', 'تمت الإزالة من Google'),
-          pendingConfirm.event.titleBn,
-          'info'
-        );
-      }
-    } catch (err) {
-      pushToast(
-        tr('গুগল ক্যালেন্ডার আপডেট ব্যর্থ', 'Google Calendar Error', 'خطأ في تقويم Google'),
-        err instanceof Error ? err.message : 'Request failed.',
-        'info'
-      );
-    } finally {
-      setIsExecutingGoogleWrite(false);
-      setPendingConfirm(null);
-    }
   };
 
   const handleDownloadIcs = () => {
@@ -291,17 +166,13 @@ export const AdminCalendarTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header & Google Calendar Sync Bar */}
+      {/* Header */}
       <div className="rounded-2xl bg-gradient-to-r from-[#0a1738] via-[#192f64] to-[#005a6e] p-6 text-white shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-[#f0c95e]">
               <CalendarIcon className="h-3.5 w-3.5" />
-              {tr(
-                'প্রাতিষ্ঠানিক ক্যালেন্ডার ও গুগল ক্যালেন্ডার সিঙ্ক',
-                'Institutional Academic Calendar & Live Google Sync',
-                'التقويم الأكاديمي والمزامنة مع تقويم Google'
-              )}
+              {tr('প্রাতিষ্ঠানিক একাডেমিক ক্যালেন্ডার', 'Institutional Academic Calendar', 'التقويم الأكاديمي للمؤسسة')}
             </div>
             <h2 className="mt-2 text-xl font-bold sm:text-2xl">
               {tr(
@@ -312,23 +183,20 @@ export const AdminCalendarTab: React.FC = () => {
             </h2>
             <p className="mt-1 text-xs text-slate-200 sm:text-sm">
               {tr(
-                'গুগল ক্যালেন্ডারের সাথে সরাসরি যুক্ত করুন, সরকারি ও ইসলামী ছুটি সিঙ্ক করুন এবং .ICS ফাইল ডাউনলোড করুন।',
-                'Connect Google Calendar to auto-fetch Bangladesh Govt & Islamic holidays, push institutional events with confirmation, or export .ICS.',
-                'اربط تقويم Google لجلب العطلات الرسمية والإسلامية ومزامنة الفعاليات.'
+                'সরকারি ও ইসলামী ছুটি এবং মাদ্রাসার অনুষ্ঠান এখানে যোগ করুন; .ICS ফাইল ডাউনলোড করে গুগল ক্যালেন্ডার বা ফোনের ক্যালেন্ডারে ইমপোর্ট করা যায়।',
+                'Add government and Islamic holidays and madrasah events here; download the .ICS file to import them into Google Calendar or a phone calendar.',
+                'أضف العطلات الرسمية والإسلامية وفعاليات المدرسة هنا؛ ويمكن تنزيل ملف ‎.ICS لاستيراده إلى تقويم Google أو تقويم الهاتف.'
               )}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={googleEmail ? handleRefreshGoogleEvents : handleConnectGoogle}
-              disabled={isSyncingGoogle}
+              onClick={handleConnectGoogle}
               className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-[#192f64] shadow transition hover:bg-slate-100 disabled:opacity-60"
             >
-              <RefreshCw className={`h-4 w-4 text-[#005a6e] ${isSyncingGoogle ? 'animate-spin' : ''}`} />
-              {googleEmail
-                ? tr('গুগল ক্যালেন্ডার রিফ্রেশ করুন', 'Sync Google Calendar Now', 'تحديث تقويم Google')
-                : tr('গুগল ক্যালেন্ডার যুক্ত করুন', 'Connect Google Calendar', 'ربط تقويم Google')}
+              <RefreshCw className="h-4 w-4 text-[#005a6e]" />
+              {tr('গুগল ক্যালেন্ডার যুক্ত করুন', 'Connect Google Calendar', 'ربط تقويم Google')}
             </button>
             <button
               type="button"
@@ -340,12 +208,6 @@ export const AdminCalendarTab: React.FC = () => {
             </button>
           </div>
         </div>
-        {googleEmail && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-200">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            {tr(`সংযুক্ত গুগল অ্যাকাউন্ট: ${googleEmail}`, `Connected Google Account: ${googleEmail}`, `الحساب المتصل: ${googleEmail}`)}
-          </div>
-        )}
       </div>
 
       {/* Category Filter Bar */}
@@ -531,7 +393,7 @@ export const AdminCalendarTab: React.FC = () => {
             </button>
           </form>
 
-          {/* Upcoming Events & Google Sync Controls */}
+          {/* Upcoming Events */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <h3 className="mb-3 text-sm font-bold text-[#192f64] dark:text-white">
               {tr('আসন্ন ছুটি ও প্রাতিষ্ঠানিক সময়সূচি', 'Upcoming Holidays & Institutional Events', 'الفعاليات والعطلات القادمة')}
@@ -568,38 +430,16 @@ export const AdminCalendarTab: React.FC = () => {
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      {!ev.id.startsWith('leave-') && !ev.googleEventId && (
-                        <button
-                          type="button"
-                          onClick={() => setPendingConfirm({ type: 'push', event: ev })}
-                          title={tr('গুগল ক্যালেন্ডারে পুশ করুন', 'Push to Google Calendar', 'مزامنة مع Google')}
-                          className="rounded-lg bg-sky-100 p-1.5 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-300"
+                      {ev.htmlLink && (
+                        <a
+                          href={ev.htmlLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg bg-emerald-100 p-1.5 text-emerald-700 hover:bg-emerald-200"
+                          title="Open in Google Calendar"
                         >
-                          <CloudUpload className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                      {ev.googleEventId && (
-                        <>
-                          {ev.htmlLink && (
-                            <a
-                              href={ev.htmlLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-lg bg-emerald-100 p-1.5 text-emerald-700 hover:bg-emerald-200"
-                              title="Open in Google Calendar"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </a>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setPendingConfirm({ type: 'delete', event: ev })}
-                            title="Remove from Google Calendar"
-                            className="rounded-lg bg-amber-100 p-1.5 text-amber-700 hover:bg-amber-200"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
                       )}
                       {!ev.id.startsWith('leave-') && (
                         <button
@@ -620,81 +460,6 @@ export const AdminCalendarTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Explicit Confirmation Modal for Google Calendar Write/Delete */}
-      {pendingConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-amber-100 p-2.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                <AlertTriangle className="h-5 w-5" />
-              </div>
-              <div>
-                <h4 className="text-base font-bold text-[#192f64] dark:text-white">
-                  {pendingConfirm.type === 'push'
-                    ? tr(
-                        'গুগল ক্যালেন্ডারে ইভেন্ট যোগ করার নিশ্চিতকরণ',
-                        'Confirm Push to Google Calendar',
-                        'تأكيد الإضافة إلى تقويم Google'
-                      )
-                    : tr(
-                        'গুগল ক্যালেন্ডার থেকে ইভেন্ট মোছার নিশ্চিতকরণ',
-                        'Confirm Remove from Google Calendar',
-                        'تأكيد الحذف من تقويم Google'
-                      )}
-                </h4>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                  {pendingConfirm.type === 'push'
-                    ? tr(
-                        'আপনি কি নিশ্চিত যে এই প্রাতিষ্ঠানিক ইভেন্টটি আপনার প্রাইমারি গুগল ক্যালেন্ডারে যুক্ত করবেন?',
-                        'Are you sure you want to create this institutional event in your primary Google Calendar?',
-                        'هل أنت متأكد من إنشاء هذا الحدث في تقويم Google الخاص بك؟'
-                      )
-                    : tr(
-                        'আপনি কি নিশ্চিত যে এই ইভেন্টটি আপনার গুগল ক্যালেন্ডার থেকে মুছে ফেলবেন?',
-                        'Are you sure you want to permanently remove this synced event from your Google Calendar?',
-                        'هل أنت متأكد من حذف هذا الحدث من تقويم Google؟'
-                      )}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-700 dark:bg-slate-800">
-              <div className="font-bold text-slate-900 dark:text-white">
-                {pendingConfirm.event.titleBn}
-              </div>
-              <div className="mt-0.5 text-slate-500">
-                {pendingConfirm.event.date} {pendingConfirm.event.time || ''}
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPendingConfirm(null)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
-              >
-                {tr('বাতিল করুন', 'Cancel', 'إلغاء')}
-              </button>
-              <button
-                type="button"
-                disabled={isExecutingGoogleWrite}
-                onClick={handleConfirmGoogleAction}
-                className={`rounded-xl px-4 py-2 text-xs font-bold text-white shadow disabled:opacity-60 ${
-                  pendingConfirm.type === 'push'
-                    ? 'bg-[#005a6e] hover:bg-[#004555]'
-                    : 'bg-rose-600 hover:bg-rose-700'
-                }`}
-              >
-                {isExecutingGoogleWrite
-                  ? tr('সম্পন্ন হচ্ছে...', 'Working...', 'جارٍ التنفيذ...')
-                  : pendingConfirm.type === 'push'
-                  ? tr('হ্যাঁ, গুগলে যুক্ত করুন', 'Yes, Add to Google Calendar', 'نعم، أضف إلى Google')
-                  : tr('হ্যাঁ, গুগল থেকে মুছুন', 'Yes, Delete from Google', 'نعم، احذف من Google')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

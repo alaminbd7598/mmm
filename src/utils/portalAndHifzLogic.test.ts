@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   buildHafizBiography,
   buildHafizCertificateCode,
-  DEFAULT_EXTERNAL_PORTALS,
   isValidExternalPortalUrl,
   MAHARAT_LOGO_COLORS,
   removeBotQAItem,

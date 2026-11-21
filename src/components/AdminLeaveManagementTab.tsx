@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Calendar,
   CalendarDays,
-  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -12,10 +11,8 @@ import {
   FileCheck2,
   FileText,
   Filter,
-  Info,
   Lock,
   MailCheck,
-  Plus,
   Printer,
   RotateCcw,
   Send,
@@ -23,7 +20,6 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
-  UserCheck,
   Users,
   X,
   XCircle,
@@ -32,7 +28,6 @@ import { useCMS } from '../store/useCMSStore';
 import {
   ConfigurableRole,
   LeaveStatus,
-  PermissionAction,
   PhotoGalleryCategory,
   TeacherLeaveRequest,
 } from '../types/cms';
@@ -54,7 +49,7 @@ import {
   validateLeaveRequestInput,
 } from '../utils/cmsLogic';
 import { generateLeaveApprovalPDF } from '../utils/pdfExport';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 
 export const AdminLeaveManagementTab: React.FC = () => {
   const {
@@ -1636,9 +1631,9 @@ export const AdminRBACMatrixSection: React.FC = () => {
         ar: 'المكتب الافتراضي والمكتب المباشر',
       },
       calendar: {
-        bn: 'প্রাতিষ্ঠানিক ক্যালেন্ডার ও Google Sync (Calendar)',
-        en: 'Institutional Calendar & Google Sync',
-        ar: 'التقويم المؤسسي ومزامنة جوجل',
+        bn: 'প্রাতিষ্ঠানিক ক্যালেন্ডার (Calendar)',
+        en: 'Institutional Calendar',
+        ar: 'التقويم المؤسسي',
       },
       blog: {
         bn: 'ব্লগ ও অটো-পোস্টিং API (Blog & Auto-Posting)',
@@ -2108,17 +2103,17 @@ export const AdminVideosTab: React.FC = () => {
 
   const [campusDraft, setCampusDraft] = useState(state.campusVideo);
   const [actTitle, setActTitle] = useState('');
-  const [actCategory, setActCategory] = useState('Academic');
-  const [actDuration, setActDuration] = useState('03:30');
+  const [actCategory] = useState('Academic');
+  const [actDuration] = useState('03:30');
   const [actVideoUrl, setActVideoUrl] = useState('');
   const [actThumbUrl, setActThumbUrl] = useState('/assets/maharat/fb/fb-media-15.jpg');
 
   const [reelTitle, setReelTitle] = useState('');
   const [reelGuardian, setReelGuardian] = useState('');
-  const [reelRelation, setReelRelation] = useState('Guardian of Class 4 Student');
-  const [reelDuration, setReelDuration] = useState('01:15');
+  const [reelRelation] = useState('Guardian of Class 4 Student');
+  const [reelDuration] = useState('01:15');
   const [reelVideoUrl, setReelVideoUrl] = useState('');
-  const [reelThumbUrl, setReelThumbUrl] = useState('/assets/maharat/fb/fb-media-18.jpg');
+  const [reelThumbUrl] = useState('/assets/maharat/fb/fb-media-18.jpg');
 
   // New Hafez Graduate Form State
   const nextSerial = (state.hifzTreeConfig?.graduates?.length || 30) + 1;
@@ -2126,7 +2121,7 @@ export const AdminVideosTab: React.FC = () => {
   const [hafizNameBn, setHafizNameBn] = useState('');
   const [hafizClassBn, setHafizClassBn] = useState('হিফজুল কুরআন বিভাগ');
   const [hafizSession, setHafizSession] = useState('2026');
-  const [hafizDurationBn, setHafizDurationBn] = useState('আন্তর্জাতিক মানের তাজবীদ ও সুন্দর তিলাওয়াত');
+  const [hafizDurationBn] = useState('আন্তর্জাতিক মানের তাজবীদ ও সুন্দর তিলাওয়াত');
   const [hafizDescBn, setHafizDescBn] = useState('');
   const [hafizFatherBn, setHafizFatherBn] = useState('');
   const [hafizTeacherBn, setHafizTeacherBn] = useState('');
@@ -3292,7 +3287,7 @@ export const AdminBackupAndAITab: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `craft_institute_full_cms_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `maharat_madrasah_cms_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

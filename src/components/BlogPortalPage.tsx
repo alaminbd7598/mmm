@@ -19,6 +19,8 @@ import {
 import { useCMS } from '../store/useCMSStore';
 import { BlogPostItem } from '../types/cms';
 import { localizeDigits } from '../utils/i18nContent';
+import { safeImageUrl, safeLinkUrl } from '../utils/safeUrl';
+import { SITE_NAME, titleForPath } from '../app/seo';
 
 type Lang = 'bn' | 'en' | 'ar';
 
@@ -56,22 +58,6 @@ const formatDate = (value: string, lang: Lang): string => {
 const readingMinutes = (markdown: string): number => {
   const words = markdown.replace(/[#*_>`\-\[\]()]/g, ' ').split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / 180));
-};
-
-/** Only http(s), mailto and same-site paths/anchors survive; everything else is dropped. */
-const safeLinkUrl = (url: string): string => {
-  const u = (url || '').trim();
-  if (/^(https?:\/\/|mailto:)/i.test(u)) return u;
-  if (/^\/(?!\/)/.test(u) || u.startsWith('#')) return u;
-  return '';
-};
-
-const safeImageUrl = (url: string): string => {
-  const u = (url || '').trim();
-  if (/^https?:\/\//i.test(u) || /^\/(?!\/)/.test(u)) return u;
-  // Same inline raster formats the admin editor accepts (AdminBlogTab), so saved covers stay visible.
-  if (/^data:image\/(png|jpe?g|webp|gif|avif);base64,/i.test(u)) return u;
-  return '';
 };
 
 const isExternalHref = (href: string): boolean => {
@@ -295,6 +281,22 @@ export const BlogPortalPage: React.FC = () => {
     }
   }, []);
 
+  /**
+   * Link attributes for opening an article: a real address (new tab, copy link, crawlers) that a
+   * plain click still opens in place.
+   */
+  const postLink = (post: BlogPostItem) => {
+    const slug = post.slug || post.id;
+    return {
+      href: buildPostUrl(slug),
+      onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        goTo(slug);
+      },
+    };
+  };
+
   // Runs only when the reader opens/closes/changes, never on the first mount:
   // the host page already scrolls to the top when /blog is entered.
   useEffect(() => {
@@ -306,6 +308,12 @@ export const BlogPortalPage: React.FC = () => {
     if (activePost) articleHeadingRef.current?.focus({ preventScroll: true });
     else topRef.current?.focus({ preventScroll: true });
   }, [activePost?.id]);
+
+  // Browser-tab title: the open article, or the blog page itself.
+  const activePostTitle = activePost ? postTitle(activePost, lang) : '';
+  useEffect(() => {
+    document.title = activePostTitle ? `${activePostTitle} | ${SITE_NAME}` : titleForPath('/blog');
+  }, [activePostTitle]);
 
   useEffect(() => {
     if (!shareNote) return;
@@ -401,29 +409,27 @@ export const BlogPortalPage: React.FC = () => {
       <div className="flex flex-col flex-1 p-5 sm:p-6 gap-3">
         <div>{categoryBadge((post.category || '').trim())}</div>
         <h3 className="text-lg font-extrabold text-slate-900 dark:text-white leading-snug" dir="auto">
-          <button
-            type="button"
-            onClick={() => goTo(post.slug || post.id)}
+          <a
+            {...postLink(post)}
             className="text-start hover:text-[#005a6e] dark:hover:text-teal-300 focus:outline-none focus-visible:underline"
           >
             {postTitle(post, lang)}
-          </button>
+          </a>
         </h3>
         <p className="text-sm leading-7 text-slate-600 dark:text-slate-300 line-clamp-3" dir="auto">
           {postExcerpt(post, lang)}
         </p>
         <div className="mt-auto pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
           {renderMeta(post, 'card')}
-          <button
-            type="button"
+          <a
             data-testid={`blog-read-${post.id}`}
-            onClick={() => goTo(post.slug || post.id)}
+            {...postLink(post)}
             aria-label={`${tr('সম্পূর্ণ পড়ুন', 'Read full article', 'اقرأ المقال كاملاً')}: ${postTitle(post, lang)}`}
             className="inline-flex items-center gap-1.5 text-sm font-bold text-[#005a6e] dark:text-teal-300 hover:text-[#192f64] dark:hover:text-white"
           >
             <span>{tr('সম্পূর্ণ পড়ুন', 'Read article', 'اقرأ المقال')}</span>
             <ArrowRight className="w-4 h-4 rtl:rotate-180" aria-hidden="true" />
-          </button>
+          </a>
         </div>
       </div>
     </article>
@@ -766,17 +772,16 @@ export const BlogPortalPage: React.FC = () => {
               </p>
               {renderMeta(featured, 'card')}
               <div>
-                <button
-                  type="button"
+                <a
                   data-testid={`blog-read-${featured.id}`}
-                  onClick={() => goTo(featured.slug || featured.id)}
+                  {...postLink(featured)}
                   aria-label={`${tr('সম্পূর্ণ পড়ুন', 'Read full article', 'اقرأ المقال كاملاً')}: ${postTitle(featured, lang)}`}
                   className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#192f64] hover:bg-[#005a6e] text-white text-sm font-bold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c4962c] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
                 >
                   <BookOpen className="w-4 h-4" aria-hidden="true" />
                   <span>{tr('সম্পূর্ণ প্রবন্ধ পড়ুন', 'Read the full article', 'اقرأ المقال كاملاً')}</span>
                   <ArrowRight className="w-4 h-4 rtl:rotate-180" aria-hidden="true" />
-                </button>
+                </a>
               </div>
             </div>
           </article>

@@ -1169,7 +1169,6 @@ export const INITIAL_CMS_STATE: CMSState = {
     {
       id: 'usr-super',
       username: 'admin',
-      password: 'admin123',
       fullName: 'System Super Administrator',
       designation: 'Chief Systems Administrator',
       email: 'admin@maharatmadrasah.com',
@@ -1182,7 +1181,6 @@ export const INITIAL_CMS_STATE: CMSState = {
     {
       id: 'usr-chairman',
       username: 'chairman',
-      password: 'chairman123',
       fullName: 'ড. মো. নূরুল্লাহ (Dr. Md. Nurullah)',
       designation: 'চেয়ারম্যান, পরিচালনা কমিটি',
       email: 'chairman@maharatmadrasah.com',
@@ -1195,7 +1193,6 @@ export const INITIAL_CMS_STATE: CMSState = {
     {
       id: 'usr-principal',
       username: 'principal',
-      password: 'principal123',
       fullName: 'মুনকাদির সাদী আল-মাদানী (Munkadir Sadi Al-Madani)',
       designation: 'অধ্যক্ষ (ভারপ্রাপ্ত), মাহারাত মডেল মাদ্রাসা',
       email: 'principal@maharatmadrasah.com',
@@ -1208,7 +1205,6 @@ export const INITIAL_CMS_STATE: CMSState = {
     {
       id: 'usr-teacher',
       username: 'teacher',
-      password: 'teacher123',
       fullName: 'উস্তাদ হাফেজ মাওলানা মাহমুদুল হাসান',
       designation: 'হিফজ কো-অর্ডিনেটর ও সিনিয়র শিক্ষক',
       email: 'mahmudul.teacher@maharatmadrasah.com',
@@ -1220,7 +1216,6 @@ export const INITIAL_CMS_STATE: CMSState = {
     {
       id: 'usr-manager',
       username: 'manager',
-      password: 'manager123',
       fullName: 'একাডেমিক ও মিডিয়া কন্টেন্ট ম্যানেজার',
       designation: 'Content & Digital Media Officer',
       email: 'info@maharatmadrasah.com',

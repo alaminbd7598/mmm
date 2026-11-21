@@ -89,15 +89,7 @@ export const NoorAIChatbot: React.FC = () => {
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: query,
-            botName: aiBotConfig.botName,
-            knowledgeBase: aiBotConfig.customKnowledgeBase,
-            instituteNameBn: settings.instituteNameBn,
-            phone: settings.phonePrimary,
-            address: settings.address,
-            language,
-          }),
+          body: JSON.stringify({ message: query, language }),
         });
         if (res.ok) {
           const data = await res.json();

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react';
 import {
   ActivityVideoItem,
   AdminRole,
@@ -15,14 +15,12 @@ import {
   CampusVideoConfig,
   CareerApplicationItem,
   CareerApplicationStatus,
-  CareerCandidateAccount,
   CareerJobCircular,
   CMSState,
   ConfigurableRole,
   CourseItem,
   DayCareRoutineConfig,
   DepartmentVideoItem,
-  DetailedAdmissionData,
   EducationMethodConfig,
   EmailNotificationLog,
   EventItem,
@@ -30,7 +28,6 @@ import {
   GuardianComplaintItem,
   GuardianReelItem,
   HafizGraduateItem,
-  HifzTreeConfig,
   InstitutionalCalendarEvent,
   LeadCallLog,
   LeadNoteItem,
@@ -52,7 +49,6 @@ import {
   VirtualOfficeConfig,
   VirtualOfficeSession,
   VirtualOfficeSessionStatus,
-  WhatsAppBotConfig,
 } from '../types/cms';
 import {
   SemverBumpType,
@@ -73,11 +69,10 @@ import {
   deleteLogoFromSettings,
   enableAllPublicSections,
   findMatchingLeadByPhone,
-  mergeLiveCMSState,
   normalizeAdminRole,
-  normalizePhoneNumber,
   parseBulkLeadsCsvText,
   resolveCourseTitle,
+  toBengaliDigits,
 } from '../utils/cmsLogic';
 import {
   AppLanguage,
@@ -86,11 +81,43 @@ import {
   TranslationDictionary,
 } from '../utils/translations';
 import { ThemeMode, ThemeContextValue, useTheme } from './ThemeContext';
+import {
+  COLLECTION_KEYS,
+  MIN_PASSWORD_LENGTH,
+  PRIVATE_KEYS,
+  SINGLETON_KEYS,
+  type DemoAccount,
+  type LoginSetupIssue,
+  type SafeUser,
+  type StateKey,
+} from '../server/contracts';
+import { canReplaceKey } from '../server/state/permissions';
+import { postChangePassword, postLogin, postLogout } from '../lib/api/auth';
+import {
+  PUBLIC_CACHE_STORAGE_KEY,
+  loadInitialClientState,
+  provideInitialPublicState,
+  useServerSync,
+  type ClientStorageMode,
+  type LiveSyncStatus,
+  type SyncAudience,
+} from './sync/useServerSync';
+
+const ROLE_LABELS_BN: Record<string, string> = {
+  'Super Admin': 'সুপার অ্যাডমিন',
+  'Chairman / Managing Director': 'চেয়ারম্যান / ব্যবস্থাপনা পরিচালক',
+  'Principal / Vice Principal': 'অধ্যক্ষ / উপাধ্যক্ষ',
+  'Coordinators / Teachers': 'কো-অর্ডিনেটর / শিক্ষক',
+  'Content Managers': 'কনটেন্ট ম্যানেজার',
+};
+
+const ALL_STATE_KEYS: readonly StateKey[] = [...SINGLETON_KEYS, ...COLLECTION_KEYS];
 
 export type { ThemeMode, ThemeContextValue };
 export { useTheme };
 
-const STORAGE_KEY = 'maharat_model_madrasah_cms_v11';
+export { PUBLIC_CACHE_STORAGE_KEY };
+export type { ClientStorageMode, LiveSyncStatus };
 const LANG_STORAGE_KEY = 'maharat_model_madrasah_lang';
 const FONTSIZE_STORAGE_KEY = 'maharat_model_madrasah_fontsize';
 
@@ -101,18 +128,31 @@ export interface ToastNotification {
   type: 'success' | 'info' | 'email';
 }
 
-export interface LiveSyncStatus {
-  status: 'synced' | 'syncing' | 'local-only';
-  version: number;
-  lastSyncedAt: string | null;
+export interface LoginResult {
+  success: boolean;
+  error?: string;
+  mustChangePassword?: boolean;
 }
+
+export interface ChangePasswordResult {
+  success: boolean;
+  error?: string;
+}
+
+/** Result of a public form submission: `error` is a localized message for the visitor. */
+export type SubmitOutcome<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+export type InquiryOutcome = SubmitOutcome<{
+  /** Id of the stored lead: the reference number shown on receipts. */
+  leadId: string;
+  emailLog: EmailNotificationLog;
+}>;
 
 interface CMSContextType {
   state: CMSState;
   currentUser: AdminUser | null;
   theme: ThemeMode;
   toggleTheme: () => void;
-  setTheme: (theme: ThemeMode) => void;
   language: AppLanguage;
   setLanguage: (lang: AppLanguage) => void;
   fontSize: FontSizeLevel;
@@ -124,21 +164,19 @@ interface CMSContextType {
   pushToast: (title: string, description: string, type?: 'success' | 'info' | 'email') => void;
   // Live Deployment Server Sync
   liveSyncStatus: LiveSyncStatus;
-  syncLocalToLiveServer: (silent?: boolean) => Promise<boolean>;
   pullFromLiveServer: (silent?: boolean) => Promise<boolean>;
   enableAllWebsiteSections: () => void;
   // Auth & Personal Staff Profile Vault
-  login: (
-    username: string,
-    password?: string,
-    expectedRole?: AdminRole
-  ) => { success: boolean; error?: string };
-  loginWithGoogleProfile: (profile: {
-    email: string;
-    displayName: string;
-    photoURL?: string;
-    roleHint?: AdminRole;
-  }) => { success: boolean; error?: string };
+  login: (username: string, password?: string, expectedRole?: AdminRole) => Promise<LoginResult>;
+  /** True while the signed-in staff member must replace an initial/reset password. */
+  mustChangePassword: boolean;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<ChangePasswordResult>;
+  /** Where data is persisted: MySQL ('database'), in-memory demo server ('demo'), or not reachable ('offline'). */
+  storageMode: ClientStorageMode;
+  /** Sample sign-ins offered by a demo server (empty otherwise). */
+  demoAccounts: DemoAccount[];
+  /** The server setting still missing before staff can sign in (null when sign-in works). */
+  loginSetup: LoginSetupIssue | null;
   updateCurrentUserProfile: (
     patch: Partial<
       Pick<
@@ -155,7 +193,7 @@ interface CMSContextType {
       >
     >
   ) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   // Branding & Global Header Logo Vault
   uploadAndStoreLogo: (
     logoInput: {
@@ -186,9 +224,17 @@ interface CMSContextType {
   updateEvent: (event: EventItem) => void;
   deleteEvent: (id: string) => void;
   // Leads & Inquiries CRUD + CRM Pipeline & Deduplication
+  /**
+   * Public forms: sends the inquiry to the server and resolves with its answer; nothing is shown
+   * as submitted unless the server stored it. `viaStaffSync` (admin CRM "add lead") instead adds
+   * or merges the lead in the signed-in staff member's state, which is then synced as usual.
+   */
   submitInquiry: (
-    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>
-  ) => EmailNotificationLog;
+    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>,
+    options?: { viaStaffSync?: boolean }
+  ) => Promise<InquiryOutcome>;
+  /** Visitor-facing, localized reason why a public endpoint refused or never received a submission. */
+  publicSubmitError: (failure: { status: number; code: string; error?: string }) => string;
   updateLeadStatus: (leadId: string, newStatus: LeadStatus) => EmailNotificationLog | null;
   updateLeadCourse: (leadId: string, newCourseId: string) => void;
   deleteLead: (id: string) => void;
@@ -205,7 +251,6 @@ interface CMSContextType {
     rawText: string,
     sourceTag?: string
   ) => { newCount: number; duplicatesCount: number; invalidCount: number };
-  updateLeadDetailedAdmission: (leadId: string, detailedData: DetailedAdmissionData) => void;
   updateLeadChecklist: (
     leadId: string,
     checklistPatch: Partial<NonNullable<AdmissionLead['checklist']>>
@@ -215,18 +260,16 @@ interface CMSContextType {
   addCareerJob: (job: Omit<CareerJobCircular, 'id' | 'createdAt'>) => void;
   updateCareerJob: (job: CareerJobCircular) => void;
   deleteCareerJob: (id: string) => void;
+  /** Sends the application to the server; resolves with the stored record (server-assigned id). */
   submitCareerApplication: (
     app: Omit<CareerApplicationItem, 'id' | 'status' | 'submittedAt'>
-  ) => CareerApplicationItem;
+  ) => Promise<SubmitOutcome<{ application: CareerApplicationItem }>>;
   updateCareerApplicationStatus: (
     appId: string,
     status: CareerApplicationStatus,
     hrNote?: string
   ) => void;
   deleteCareerApplication: (appId: string) => void;
-  registerCareerCandidate: (
-    input: Omit<CareerCandidateAccount, 'id' | 'createdAt'>
-  ) => { success: boolean; candidate?: CareerCandidateAccount; error?: string };
   // Users & Roles CRUD + Granular RBAC Matrix
   addAdminUser: (user: Omit<AdminUser, 'id' | 'createdAt'>) => void;
   updateAdminUserRole: (userId: string, role: AdminUser['role']) => void;
@@ -253,7 +296,6 @@ interface CMSContextType {
   updateSettings: (settings: SiteSettings) => void;
   updatePopupConfig: (popupConfig: PopupNoticeConfig) => void;
   updateAIBotConfig: (aiBotConfig: AIBotConfig) => void;
-  updateWhatsAppConfig: (whatsappConfig: WhatsAppBotConfig) => void;
   updateFeeCalculatorConfig: (feeCalculatorConfig: FeeCalculatorConfig) => void;
   // Video & Media Showcases CRUD
   updateCampusVideo: (campusVideo: CampusVideoConfig) => void;
@@ -266,7 +308,6 @@ interface CMSContextType {
   deleteGuardianReel: (id: string) => void;
   clearAllVideoLinks: () => void;
   // Hifzul Quran Tree & Categorized Photo Gallery CRUD
-  updateHifzTreeConfig: (config: HifzTreeConfig) => void;
   addHafizGraduate: (item: Omit<HafizGraduateItem, 'id'>) => void;
   updateHafizGraduate: (item: HafizGraduateItem) => void;
   deleteHafizGraduate: (id: string) => void;
@@ -281,16 +322,17 @@ interface CMSContextType {
   updateAdmissionExtraConfig: (config: AdmissionExtraConfig) => void;
   updateUniformConfig: (config: UniformGuideConfig) => void;
   updateMadrasahContextConfig: (config: MadrasahContextConfig) => void;
+  /** Sends the complaint / suggestion to the server and resolves with its answer. */
   submitGuardianComplaint: (
     item: Omit<GuardianComplaintItem, 'id' | 'submittedAt' | 'status'>
-  ) => void;
+  ) => Promise<SubmitOutcome>;
   updateComplaintStatus: (
     id: string,
     status: GuardianComplaintItem['status'],
     adminReply?: string
   ) => void;
   deleteComplaint: (id: string) => void;
-  applyTargetInstitutionPreset: (preset: 'maharat' | 'craft') => void;
+  applyTargetInstitutionPreset: () => void;
   // Version & Release Manager + Snapshot Rollback
   updateVersionVisibility: (
     patch: Partial<
@@ -313,17 +355,15 @@ interface CMSContextType {
   addAdmissionToken: (token: Omit<AdmissionToken2027, 'id' | 'createdAt'>) => AdmissionToken2027;
   updateAdmissionToken: (token: AdmissionToken2027) => void;
   deleteAdmissionToken: (id: string) => void;
-  markAdmissionTokenApplied: (tokenId: string, leadId?: string) => void;
   // Blog & Automation API CRUD
   addBlogPost: (post: Omit<BlogPostItem, 'id'>) => BlogPostItem;
   updateBlogPost: (post: BlogPostItem) => void;
   deleteBlogPost: (id: string) => void;
   updateBlogAutomationConfig: (config: BlogAutomationConfig) => void;
-  // Institutional Academic Calendar CRUD + Google Sync
+  // Institutional Academic Calendar CRUD
   addCalendarEvent: (ev: Omit<InstitutionalCalendarEvent, 'id'>) => InstitutionalCalendarEvent;
   updateCalendarEvent: (ev: InstitutionalCalendarEvent) => void;
   deleteCalendarEvent: (id: string) => void;
-  mergeGoogleCalendarEvents: (incoming: InstitutionalCalendarEvent[]) => number;
   // Mobile App-Style Bottom Bar Config
   updateMobileBottomBar: (config: MobileBottomBarConfig) => void;
   // Virtual Office / Hybrid Live Desk Config & Sessions
@@ -338,37 +378,28 @@ interface CMSContextType {
 
 const CMSContext = createContext<CMSContextType | undefined>(undefined);
 
-export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { theme, setTheme, toggleTheme } = useTheme();
+export const CMSProvider: React.FC<{
+  children: React.ReactNode;
+  /** Public content rendered into the page by the server, for a first paint with live data. */
+  initialPublicState?: Partial<CMSState> | null;
+}> = ({ children, initialPublicState }) => {
+  const { theme, toggleTheme } = useTheme();
 
   const [state, setState] = useState<CMSState>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return mergeLiveCMSState(parsed, INITIAL_CMS_STATE);
-      }
-    } catch {
-      // Fallback to seed state if localStorage is blocked or corrupted
-    }
-    return INITIAL_CMS_STATE;
+    provideInitialPublicState(initialPublicState);
+    return loadInitialClientState();
   });
 
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
-  const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>({
-    status: 'syncing',
-    version: 0,
-    lastSyncedAt: null,
-  });
 
-  const isApplyingServerUpdateRef = useRef(false);
-  const hasInitializedServerRef = useRef(false);
-  const serverVersionRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
+  const mustChangePasswordRef = useRef(mustChangePassword);
+  mustChangePasswordRef.current = mustChangePassword;
 
   // Multi-Language state ('bn' | 'en' | 'ar') with default 'bn'
   const [language, setLanguageState] = useState<AppLanguage>(() => {
@@ -443,142 +474,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const t = TRANSLATIONS[language] || TRANSLATIONS.bn;
 
-  const pushStateToServer = async (payloadState: CMSState): Promise<boolean> => {
-    try {
-      setLiveSyncStatus((prev) => ({ ...prev, status: 'syncing' }));
-      const res = await fetch('/api/cms-state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: payloadState }),
-      });
-      if (!res.ok) {
-        setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-        return false;
-      }
-      const data = await res.json();
-      if (data?.ok) {
-        serverVersionRef.current = Number(data.version) || serverVersionRef.current + 1;
-        setLiveSyncStatus({
-          status: 'synced',
-          version: serverVersionRef.current,
-          lastSyncedAt: data.updatedAt || new Date().toISOString(),
-        });
-        return true;
-      }
-      setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-      return false;
-    } catch {
-      setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-      return false;
-    }
-  };
-
-  // Initial Hydrate or Seed to Live Server on Mount + Periodic Live Polling
-  useEffect(() => {
-    let isMounted = true;
-
-    const initLiveSync = async () => {
-      try {
-        const res = await fetch('/api/cms-state');
-        if (!res.ok) {
-          hasInitializedServerRef.current = true;
-          return;
-        }
-        const data = await res.json();
-        if (!isMounted) return;
-
-        if (data?.hasServerState && data?.state) {
-          isApplyingServerUpdateRef.current = true;
-          const merged = mergeLiveCMSState(data.state, INITIAL_CMS_STATE);
-          serverVersionRef.current = Number(data.version) || 1;
-          setState(merged);
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-          } catch {
-            // ignore
-          }
-          setLiveSyncStatus({
-            status: 'synced',
-            version: serverVersionRef.current,
-            lastSyncedAt: data.updatedAt || new Date().toISOString(),
-          });
-          hasInitializedServerRef.current = true;
-        } else {
-          // Server has no state yet: immediately promote this browser's local state to the live server
-          hasInitializedServerRef.current = true;
-          await pushStateToServer(stateRef.current);
-        }
-      } catch {
-        hasInitializedServerRef.current = true;
-        if (isMounted) {
-          setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-        }
-      }
-    };
-
-    initLiveSync();
-
-    // Poll /api/cms-state/meta every 4.5s so all visitors receive live updates across devices
-    const pollTimer = window.setInterval(async () => {
-      if (!hasInitializedServerRef.current) return;
-      try {
-        const metaRes = await fetch('/api/cms-state/meta');
-        if (!metaRes.ok) return;
-        const meta = await metaRes.json();
-        const remoteVersion = Number(meta?.version) || 0;
-        if (meta?.hasServerState && remoteVersion > serverVersionRef.current) {
-          const fullRes = await fetch('/api/cms-state', {
-            headers: currentUserRef.current ? { 'X-MMM-Admin': '1' } : undefined,
-          });
-          if (!fullRes.ok) return;
-          const fullData = await fullRes.json();
-          if (fullData?.state && isMounted) {
-            isApplyingServerUpdateRef.current = true;
-            const merged = mergeLiveCMSState(fullData.state, INITIAL_CMS_STATE);
-            serverVersionRef.current = Number(fullData.version) || remoteVersion;
-            setState(merged);
-            setLiveSyncStatus({
-              status: 'synced',
-              version: serverVersionRef.current,
-              lastSyncedAt: fullData.updatedAt || new Date().toISOString(),
-            });
-          }
-        }
-      } catch {
-        // Ignore transient network errors during background poll
-      }
-    }, 4500);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(pollTimer);
-    };
-  }, []);
-
-  // Persist to localStorage AND sync to Live Server whenever state changes
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore storage quota errors in sandboxed iframes
-    }
-
-    if (isApplyingServerUpdateRef.current) {
-      isApplyingServerUpdateRef.current = false;
-      return;
-    }
-
-    if (!hasInitializedServerRef.current) {
-      return;
-    }
-
-    const syncTimer = window.setTimeout(() => {
-      pushStateToServer(state);
-    }, 150);
-
-    return () => window.clearTimeout(syncTimer);
-  }, [state]);
-
   const dismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
@@ -598,119 +493,207 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const tr = (bn: string, en: string, ar: string) =>
     language === 'bn' ? bn : language === 'ar' ? ar : en;
 
-  const login = (username: string, password?: string, expectedRole?: AdminRole) => {
-    const cleanUser = username.trim().toLowerCase();
-    const cleanPass = (password || '').trim();
-    if (!cleanUser || !cleanPass) {
+  const toClientUser = (user: SafeUser): AdminUser => {
+    const { mustChangePassword: _pending, ...profile } = user;
+    return { ...profile, role: normalizeAdminRole(profile.role) };
+  };
+
+  const handleSession = useCallback((me: SafeUser | null, audience: SyncAudience) => {
+    if (me) {
+      setCurrentUser(toClientUser(me));
+      setMustChangePassword(Boolean(me.mustChangePassword));
+      return;
+    }
+    // A session that must change its password may not read staff state yet; keep it signed in.
+    if (audience === 'public' && currentUserRef.current && !mustChangePasswordRef.current) {
+      setCurrentUser(null);
+    }
+  }, []);
+
+  const sync = useServerSync({ state, setState, onSession: handleSession, notify: pushToast, tr });
+  const { storageMode, liveSyncStatus, demoAccounts, loginSetup } = sync;
+
+  const loginErrorMessage = (code: string, status: number, roleLabel: string): string => {
+    switch (code) {
+      case 'INVALID_CREDENTIALS':
+        return tr(
+          'ইউজার আইডি অথবা পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে আবার চেষ্টা করুন।',
+          'Invalid User ID or Password. Please verify your credentials.',
+          'اسم المستخدم أو كلمة المرور غير صحيحة.'
+        );
+      case 'ROLE_MISMATCH':
+        return tr(
+          `এই অ্যাকাউন্টটি "${ROLE_LABELS_BN[roleLabel] || roleLabel}" রোলের নয়। অনুগ্রহ করে সঠিক রোল নির্বাচন করুন।`,
+          `This account is not assigned to "${roleLabel}". Please select the matching role to sign in.`,
+          `هذا الحساب غير مخصص لدور "${roleLabel}". يرجى اختيار الدور الصحيح.`
+        );
+      case 'RATE_LIMITED':
+        return tr(
+          'অনেকবার ভুল চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।',
+          'Too many sign-in attempts. Please try again in a few minutes.',
+          'محاولات تسجيل دخول كثيرة. يرجى المحاولة بعد بضع دقائق.'
+        );
+      case 'NOT_CONFIGURED':
+        return tr(
+          'সার্ভারে লগইন চালু করা হয়নি। হোস্টিং প্যানেলে DATABASE_URL, JWT_SECRET ও ADMIN_BOOTSTRAP_PASSWORD ঠিকভাবে বসিয়ে সার্ভার রিস্টার্ট করুন।',
+          'Sign-in is not set up on the server. Set DATABASE_URL, JWT_SECRET and ADMIN_BOOTSTRAP_PASSWORD in the hosting panel and restart the server.',
+          'لم يتم إعداد تسجيل الدخول على الخادم. اضبط DATABASE_URL و JWT_SECRET و ADMIN_BOOTSTRAP_PASSWORD ثم أعد تشغيل الخادم.'
+        );
+      default:
+        return status === 0
+          ? tr(
+              'সার্ভারের সাথে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ যাচাই করে আবার চেষ্টা করুন।',
+              'Could not reach the server. Please check your connection and try again.',
+              'تعذر الاتصال بالخادم. يرجى التحقق من الاتصال والمحاولة مرة أخرى.'
+            )
+          : tr(
+              'লগইন সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+              'Sign-in could not be completed. Please try again.',
+              'تعذر إكمال تسجيل الدخول. يرجى المحاولة مرة أخرى.'
+            );
+    }
+  };
+
+  const login = async (username: string, password?: string, expectedRole?: AdminRole): Promise<LoginResult> => {
+    const cleanUser = username.trim();
+    const cleanPass = password || '';
+    if (!cleanUser || !cleanPass.trim()) {
       return {
         success: false,
         error: tr(
-          'অনুগ্রহ করে ইউজার আইডি এবং পাসওয়ার্ড উভয়ই প্রদান করুন।',
+          'অনুগ্রহ করে ইউজার আইডি এবং পাসওয়ার্ড উভয়ই প্রদান করুন।',
           'Please enter both User ID and Password.',
           'يرجى إدخال اسم المستخدم وكلمة المرور.'
         ),
       };
     }
 
-    const matched = state.users.find(
-      (u) => u.username.toLowerCase() === cleanUser && u.password === cleanPass
-    );
-    if (!matched) {
+    // Persist any pending visitor submission before the state is replaced by staff data.
+    await sync.flush();
+    const res = await postLogin(cleanUser, cleanPass, expectedRole);
+    if (!res.ok || !res.data.user) {
+      const code = res.ok ? res.data.code || 'FAILED' : res.code;
       return {
         success: false,
-        error: tr(
-          'ইউজার আইডি অথবা পাসওয়ার্ড সঠিক নয়। অনুগ্রহ করে সঠিক ক্রেডেনশিয়াল প্রদান করুন।',
-          'Invalid User ID or Password. Please verify your credentials.',
-          'اسم المستخدم أو كلمة المرور غير صحيحة.'
-        ),
+        error: loginErrorMessage(code, res.status, normalizeAdminRole(expectedRole || '')),
       };
     }
 
-    const normalizedUserRole = normalizeAdminRole(matched.role);
-    if (expectedRole && normalizeAdminRole(expectedRole) !== normalizedUserRole) {
-      return {
-        success: false,
-        error: tr(
-          `এই অ্যাকাউন্টটি "${normalizedUserRole}" রোলের জন্য নির্ধারিত। অনুগ্রহ করে সঠিক রোল নির্বাচন করুন।`,
-          `This account is assigned to "${normalizedUserRole}". Please select the matching role to sign in.`,
-          `هذا الحساب مخصص لدور "${normalizedUserRole}". يرجى اختيار الدور الصحيح.`
-        ),
-      };
-    }
+    const user = toClientUser(res.data.user);
+    const pending = Boolean(res.data.mustChangePassword ?? res.data.user.mustChangePassword);
+    setCurrentUser(user);
+    setMustChangePassword(pending);
+    // Staff data is only served once the initial password has been replaced.
+    if (!pending) await sync.refetch();
 
-    setCurrentUser({ ...matched, role: normalizedUserRole });
     pushToast(
+      tr(`স্বাগতম, ${user.fullName}`, `Welcome, ${user.fullName}`, `مرحباً، ${user.fullName}`),
       tr(
-        `স্বাগতম, ${matched.fullName}`,
-        `Welcome, ${matched.fullName}`,
-        `مرحباً، ${matched.fullName}`
-      ),
-      tr(
-        `সক্রিয় রোল: ${normalizedUserRole}`,
-        `Authenticated Role: ${normalizedUserRole}`,
-        `تم تسجيل الدخول بدور: ${normalizedUserRole}`
+        `সক্রিয় রোল: ${user.role}`,
+        `Authenticated Role: ${user.role}`,
+        `تم تسجيل الدخول بدور: ${user.role}`
       ),
       'info'
     );
-    return { success: true };
+    return { success: true, mustChangePassword: pending };
   };
 
-  const loginWithGoogleProfile = (profile: {
-    email: string;
-    displayName: string;
-    photoURL?: string;
-    roleHint?: AdminRole;
-  }) => {
-    const cleanEmail = (profile.email || '').trim().toLowerCase();
-    const matched = state.users.find(
-      (u) =>
-        u.email.toLowerCase() === cleanEmail ||
-        (u.googleEmail && u.googleEmail.toLowerCase() === cleanEmail)
-    );
-
-    if (matched) {
-      const normalizedUserRole = normalizeAdminRole(matched.role);
-      const updatedMatched: AdminUser = {
-        ...matched,
-        role: normalizedUserRole,
-        googleEmail: profile.email,
-        photoUrl: matched.photoUrl || profile.photoURL,
-      };
-      setState((prev) => ({
-        ...prev,
-        users: prev.users.map((u) => (u.id === matched.id ? updatedMatched : u)),
-      }));
-      setCurrentUser(updatedMatched);
-      pushToast(
-        tr(`Google সাইন-ইন সম্পন্ন: ${updatedMatched.fullName}`, `Signed in via Google: ${updatedMatched.fullName}`, `تم تسجيل الدخول عبر Google`),
-        `${normalizedUserRole} · ${profile.email}`,
-        'info'
-      );
-      return { success: true };
+  const changePasswordErrorMessage = (code: string, status: number): string => {
+    switch (code) {
+      case 'INVALID_CREDENTIALS':
+        return tr('বর্তমান পাসওয়ার্ডটি সঠিক নয়।', 'The current password is incorrect.', 'كلمة المرور الحالية غير صحيحة.');
+      case 'TOO_SHORT':
+        return tr(
+          `নতুন পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে।`,
+          `The new password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
+          `يجب ألا تقل كلمة المرور الجديدة عن ${MIN_PASSWORD_LENGTH} أحرف.`
+        );
+      case 'TOO_LONG':
+        return tr(
+          'নতুন পাসওয়ার্ডটি খুব দীর্ঘ; অনুগ্রহ করে আরও ছোট পাসওয়ার্ড দিন।',
+          'The new password is too long; please choose a shorter one.',
+          'كلمة المرور الجديدة طويلة جداً؛ يرجى اختيار كلمة أقصر.'
+        );
+      case 'NEEDS_LETTER_AND_DIGIT':
+        return tr(
+          'নতুন পাসওয়ার্ডে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।',
+          'The new password must contain both letters and digits.',
+          'يجب أن تحتوي كلمة المرور الجديدة على أحرف وأرقام.'
+        );
+      case 'SAME_AS_USERNAME':
+      case 'CONTAINS_USERNAME':
+        return tr(
+          'পাসওয়ার্ডের ভেতরে ইউজার আইডি থাকতে পারবে না।',
+          'The password must not contain the User ID.',
+          'يجب ألا تحتوي كلمة المرور على اسم المستخدم.'
+        );
+      case 'TOO_COMMON':
+        return tr(
+          'এই পাসওয়ার্ডটি খুব প্রচলিত বা সহজে অনুমান করা যায়; অনুগ্রহ করে অন্য পাসওয়ার্ড বেছে নিন।',
+          'This password is too common or easy to guess; please choose another one.',
+          'كلمة المرور هذه شائعة أو سهلة التخمين؛ يرجى اختيار كلمة أخرى.'
+        );
+      case 'SAME_AS_CURRENT':
+        return tr(
+          'নতুন পাসওয়ার্ড বর্তমান পাসওয়ার্ড থেকে ভিন্ন হতে হবে।',
+          'The new password must differ from the current one.',
+          'يجب أن تختلف كلمة المرور الجديدة عن الحالية.'
+        );
+      case 'RATE_LIMITED':
+        return tr(
+          'অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।',
+          'Too many attempts. Please try again later.',
+          'محاولات كثيرة. يرجى المحاولة لاحقاً.'
+        );
+      case 'UNAUTHENTICATED':
+        return tr(
+          'সেশনের মেয়াদ শেষ। অনুগ্রহ করে আবার লগইন করুন।',
+          'Your session has expired. Please sign in again.',
+          'انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.'
+        );
+      default:
+        return status === 0
+          ? tr(
+              'সার্ভারের সাথে সংযোগ করা যায়নি। আবার চেষ্টা করুন।',
+              'Could not reach the server. Please try again.',
+              'تعذر الاتصال بالخادم. يرجى المحاولة مرة أخرى.'
+            )
+          : tr(
+              'পাসওয়ার্ড পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।',
+              'The password could not be changed. Please try again.',
+              'تعذر تغيير كلمة المرور. يرجى المحاولة مرة أخرى.'
+            );
     }
+  };
 
-    const assignedRole = profile.roleHint || 'Super Admin';
-    const newGoogleUser: AdminUser = {
-      id: `usr-google-${Date.now()}`,
-      username: cleanEmail.split('@')[0] || 'google-staff',
-      fullName: profile.displayName || cleanEmail,
-      email: profile.email,
-      googleEmail: profile.email,
-      photoUrl: profile.photoURL,
-      role: assignedRole,
-      designation: 'Google Verified Institutional Staff',
-      signatorySlot: 'none',
-      createdAt: new Date().toISOString().slice(0, 10),
-    };
-    setState((prev) => ({
-      ...prev,
-      users: [...prev.users, newGoogleUser],
-    }));
-    setCurrentUser(newGoogleUser);
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<ChangePasswordResult> => {
+    if (!currentUserRef.current) {
+      return { success: false, error: changePasswordErrorMessage('UNAUTHENTICATED', 401) };
+    }
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      return { success: false, error: changePasswordErrorMessage('TOO_SHORT', 400) };
+    }
+    const res = await postChangePassword(currentPassword, newPassword);
+    if (!res.ok) {
+      if (res.code === 'UNAUTHENTICATED') {
+        setCurrentUser(null);
+        setMustChangePassword(false);
+        sync.resetToPublic();
+        void sync.refetch();
+      }
+      return { success: false, error: changePasswordErrorMessage(res.code, res.status) };
+    }
+    const wasPending = mustChangePasswordRef.current;
+    setMustChangePassword(false);
+    mustChangePasswordRef.current = false;
+    if (wasPending) await sync.refetch();
     pushToast(
-      tr(`Google সাইন-ইন সম্পন্ন: ${newGoogleUser.fullName}`, `Signed in with Google: ${newGoogleUser.fullName}`, `تم تسجيل الدخول عبر Google`),
-      `${assignedRole} · ${profile.email}`,
-      'info'
+      tr('পাসওয়ার্ড পরিবর্তন হয়েছে', 'Password Changed', 'تم تغيير كلمة المرور'),
+      tr(
+        'আপনার নতুন পাসওয়ার্ড সফলভাবে সংরক্ষিত হয়েছে।',
+        'Your new password has been saved securely.',
+        'تم حفظ كلمة المرور الجديدة بأمان.'
+      )
     );
     return { success: true };
   };
@@ -737,29 +720,38 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...patch,
     };
     setCurrentUser(updatedUser);
-    setState((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => {
-        if (u.id === currentUser.id) return updatedUser;
-        // Ensure signatorySlot uniqueness for chairman / principal / coordinator
+    setState((prev) => {
+      const isListed = prev.users.some((u) => u.id === currentUser.id);
+      const users = prev.users.map((u) => {
+        if (u.id === currentUser.id) return { ...u, ...patch };
+        // Taking a signatory slot (Super Admin only) removes it from whoever held it.
         if (
           patch.signatorySlot &&
           patch.signatorySlot !== 'none' &&
+          patch.signatorySlot !== currentUser.signatorySlot &&
           u.signatorySlot === patch.signatorySlot
         ) {
-          return { ...u, signatorySlot: 'none' };
+          return { ...u, signatorySlot: 'none' as const };
         }
         return u;
-      }),
-    }));
+      });
+      // Roles without the users permission may receive a state without their own record.
+      return { ...prev, users: isListed ? users : [...users, updatedUser] };
+    });
     pushToast(
-      tr('প্রোফাইল ও ডিজিটাল স্বাক্ষর সংরক্ষিত হয়েছে', 'Profile & Digital Signature Saved', 'تم حفظ الملف الشخصي والتوقيع الرقمي'),
+      tr('প্রোফাইল ও ডিজিটাল স্বাক্ষর সংরক্ষিত হয়েছে', 'Profile & Digital Signature Saved', 'تم حفظ الملف الشخصي والتوقيع الرقمي'),
       updatedUser.fullName
     );
   };
 
-  const logout = () => {
+  const logout = async (): Promise<void> => {
+    // Save the staff member's pending edits while the session is still valid.
+    if (!mustChangePasswordRef.current) await sync.flush();
+    await postLogout();
     setCurrentUser(null);
+    setMustChangePassword(false);
+    mustChangePasswordRef.current = false;
+    sync.resetToPublic();
     pushToast(
       tr('লগআউট সম্পন্ন', 'Signed Out', 'تم تسجيل الخروج'),
       tr(
@@ -769,6 +761,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ),
       'info'
     );
+    await sync.refetch();
   };
 
   const uploadAndStoreLogo = (
@@ -809,13 +802,29 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  /** Keys a factory reset must not overwrite: accounts and personal records stay as they are. */
+  const RESET_PRESERVED_KEYS: StateKey[] = ['users', ...PRIVATE_KEYS.filter((k) => k !== 'rbacMatrix')];
+
+  /**
+   * Keys the signed-in role may not replace wholesale: everything it cannot fully read, create,
+   * update and delete (same rule as the server). A restore or reset by a role with a partial view
+   * therefore never wipes data that role does not even receive.
+   */
+  const fullReplaceExclusions = (): StateKey[] => {
+    const role = currentUserRef.current?.role;
+    if (!role) return [...ALL_STATE_KEYS];
+    const matrix = stateRef.current.rbacMatrix;
+    return ALL_STATE_KEYS.filter((key) => !canReplaceKey(role, key, matrix));
+  };
+
   const resetToDefaultData = () => {
-    setState(INITIAL_CMS_STATE);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
+    const preserved = [...new Set([...RESET_PRESERVED_KEYS, ...fullReplaceExclusions()])];
+    setState((prev) => {
+      const next: Record<string, unknown> = { ...INITIAL_CMS_STATE };
+      for (const key of preserved) next[key] = prev[key];
+      return next as unknown as CMSState;
+    });
+    sync.requestFullReplace(preserved);
     pushToast(
       tr('ডাটাবেস রিসেট সম্পন্ন', 'Database Reset Complete', 'تمت إعادة ضبط قاعدة البيانات'),
       tr(
@@ -989,11 +998,115 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  /** Visitor-facing explanation of why a public form could not be submitted. */
+  const publicSubmitError = (failure: { status: number; code: string; error?: string }): string => {
+    if (failure.status === 0) {
+      return tr(
+        'সার্ভারের সাথে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ দেখে আবার চেষ্টা করুন।',
+        'Could not reach the server. Please check your connection and try again.',
+        'تعذر الاتصال بالخادم. يرجى التحقق من الاتصال والمحاولة مرة أخرى.'
+      );
+    }
+    const detail = failure.error || '';
+    if (failure.code === 'RATE_LIMITED') {
+      return tr(
+        'অল্প সময়ে অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।',
+        'Too many attempts in a short time. Please try again in a little while.',
+        'محاولات كثيرة في وقت قصير. يرجى المحاولة بعد قليل.'
+      );
+    }
+    if (failure.code === 'JOB_CLOSED') {
+      return tr(
+        'এই পদের জন্য এখন আর আবেদন গ্রহণ করা হচ্ছে না।',
+        'This position is no longer accepting applications.',
+        'لم يعد التقديم متاحاً لهذه الوظيفة.'
+      );
+    }
+    if (failure.code === 'UPLOADS_UNAVAILABLE') {
+      return tr(
+        'এই মুহূর্তে ফাইল আপলোড গ্রহণ করা যাচ্ছে না। অনুগ্রহ করে ফাইল ছাড়া জমা দিন অথবা অফিসে যোগাযোগ করুন।',
+        'File uploads cannot be accepted at the moment. Please submit without the file or contact the office.',
+        'لا يمكن استقبال الملفات حالياً. يرجى الإرسال بدون ملف أو التواصل مع المكتب.'
+      );
+    }
+    if (failure.code === 'TOO_LARGE' || /photo|cv file|too large|too big/i.test(detail)) {
+      return tr(
+        'সংযুক্ত ছবি বা ফাইলের আকার অনেক বড়। অনুগ্রহ করে ছোট আকারের ফাইল দিয়ে আবার চেষ্টা করুন।',
+        'The attached photo or file is too large. Please try again with a smaller file.',
+        'حجم الصورة أو الملف المرفق كبير جداً. يرجى المحاولة بملف أصغر.'
+      );
+    }
+    if (/phone/i.test(detail)) {
+      return tr(
+        'মোবাইল নম্বরটি সঠিক নয়। অনুগ্রহ করে সঠিক নম্বর দিয়ে আবার চেষ্টা করুন।',
+        'The phone number is not valid. Please correct it and try again.',
+        'رقم الهاتف غير صحيح. يرجى تصحيحه والمحاولة مرة أخرى.'
+      );
+    }
+    if (/email/i.test(detail)) {
+      return tr(
+        'ইমেইল ঠিকানাটি সঠিক নয়। অনুগ্রহ করে সঠিক ইমেইল দিয়ে আবার চেষ্টা করুন।',
+        'The email address is not valid. Please correct it and try again.',
+        'البريد الإلكتروني غير صحيح. يرجى تصحيحه والمحاولة مرة أخرى.'
+      );
+    }
+    if (failure.code === 'BAD_REQUEST') {
+      return tr(
+        'কিছু তথ্য সঠিক নয়। অনুগ্রহ করে ফরমের ঘরগুলো যাচাই করে আবার চেষ্টা করুন।',
+        'Some details are not valid. Please check the form and try again.',
+        'بعض البيانات غير صحيحة. يرجى مراجعة النموذج والمحاولة مرة أخرى.'
+      );
+    }
+    const phone = (stateRef.current.settings.phonePrimary || '').split('(')[0].trim();
+    return tr(
+      `দুঃখিত, এখন জমা দেওয়া যায়নি। কিছুক্ষণ পর আবার চেষ্টা করুন${phone ? ` অথবা ${phone} নম্বরে কল করুন` : ''}।`,
+      `Sorry, this could not be submitted right now. Please try again shortly${phone ? ` or call ${phone}` : ''}.`,
+      `عذراً، تعذر الإرسال الآن. يرجى المحاولة بعد قليل${phone ? ` أو الاتصال على ${phone}` : ''}.`
+    );
+  };
+
+  const displayTimestamp = (): string =>
+    new Date().toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
   // Leads & Email Notifications
-  // Leads & Email Notifications with Smart Deduplication & Auto-Progression
-  const submitInquiry = (
+  const submitInquiry = async (
+    leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>,
+    options: { viaStaffSync?: boolean } = {}
+  ): Promise<InquiryOutcome> => {
+    if (options.viaStaffSync) {
+      const { lead, emailLog } = addOrMergeLeadLocally(leadInput);
+      return { ok: true, leadId: lead.id, emailLog };
+    }
+    const courseTitle = resolveCourseTitle(state.courses, leadInput.courseId);
+    const adminEmail = buildAdminNewInquiryEmail(
+      { name: leadInput.name, phone: leadInput.phone, email: leadInput.email, courseTitle, message: leadInput.message, source: leadInput.source },
+      state.settings.email,
+      state.settings.instituteName,
+      displayTimestamp()
+    );
+    const res = await sync.submitPublic([
+      { key: 'leads', item: { ...leadInput, id: `lead-${Date.now()}` } },
+      { key: 'emails', item: { ...adminEmail } },
+    ]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
+    pushToast(
+      tr('নতুন আবেদন ও ইমেইল নোটিফিকেশন নিবন্ধিত', 'New Lead & Email Logged', 'تم تسجيل الطلب وإرسال الإشعار'),
+      `"${leadInput.name}" — ${courseTitle}`,
+      'email'
+    );
+    return { ok: true, leadId: res.ids[0] || '', emailLog: { ...adminEmail, id: res.ids[1] || adminEmail.id } };
+  };
+
+  /** Staff CRM entry with smart de-duplication and auto-progression (synced through /api/admin/sync). */
+  const addOrMergeLeadLocally = (
     leadInput: Omit<AdmissionLead, 'id' | 'status' | 'submittedAt' | 'courseTitle'>
-  ): EmailNotificationLog => {
+  ): { lead: AdmissionLead; emailLog: EmailNotificationLog } => {
     const nowFormatted = new Date().toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -1121,7 +1234,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    return adminEmailNotification;
+    return { lead: resultingLead, emailLog: adminEmailNotification };
   };
 
   const updateLeadStatus = (
@@ -1340,45 +1453,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const updateLeadDetailedAdmission = (leadId: string, detailedData: DetailedAdmissionData) => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    setState((prev) => ({
-      ...prev,
-      leads: prev.leads.map((l) => {
-        if (l.id !== leadId) return l;
-        const notes = l.notes || [];
-        return {
-          ...l,
-          detailedData,
-          status: 'Admitted',
-          priority: 'Hot',
-          admissionChancePercent: 100,
-          notes: [
-            ...notes,
-            {
-              id: `note-${Date.now()}`,
-              authorName: currentUser?.fullName || 'Admin',
-              timestamp: nowFormatted,
-              text: 'অফিস থেকে শিক্ষার্থীর ৬-ধাপের পূর্ণাঙ্গ ভর্তি ফর্ম ও তথ্য সফলভাবে সম্পন্ন করা হয়েছে।',
-            },
-          ],
-        };
-      }),
-    }));
-
-    pushToast(
-      tr('পূর্ণাঙ্গ ভর্তি ফর্ম সংরক্ষিত হয়েছে!', 'Full Admission Completed!', 'تم استكمال بيانات القبول بنجاح!'),
-      tr('শিক্ষার্থীর তথ্য Admitted ধাপে উন্নীত করা হয়েছে।', 'Student moved to Admitted status.', 'تم نقل الطالب إلى المقبولين.')
-    );
-  };
-
   const updateLeadCourse = (leadId: string, newCourseId: string) => {
     const newCourseTitle = resolveCourseTitle(state.courses, newCourseId);
     setState((prev) => ({
@@ -1479,31 +1553,19 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const submitCareerApplication = (
+  const submitCareerApplication = async (
     app: Omit<CareerApplicationItem, 'id' | 'status' | 'submittedAt'>
-  ): CareerApplicationItem => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    const newApp: CareerApplicationItem = {
-      ...app,
-      id: `capp-${Date.now()}`,
-      status: 'Received',
-      submittedAt: nowFormatted,
-    };
-    setState((prev) => ({
-      ...prev,
-      careerApplications: [newApp, ...(prev.careerApplications || [])],
-    }));
+  ): Promise<SubmitOutcome<{ application: CareerApplicationItem }>> => {
+    const res = await sync.submitPublic([{ key: 'careerApplications', item: { ...app, id: `capp-${Date.now()}` } }]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
     pushToast(
-      tr('চাকরির আবেদন সফলভাবে জমা হয়েছে!', 'Application Submitted!', 'تم إرسال طلب التوظيف بنجاح!'),
+      tr('চাকরির আবেদন সফলভাবে জমা হয়েছে!', 'Application Submitted!', 'تم إرسال طلب التوظيف بنجاح!'),
       `${app.applicantName} — ${app.jobTitleBn}`
     );
-    return newApp;
+    return {
+      ok: true,
+      application: { ...app, id: res.ids[0] || '', status: 'Received', submittedAt: displayTimestamp() },
+    };
   };
 
   const updateCareerApplicationStatus = (
@@ -1536,39 +1598,9 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const registerCareerCandidate = (
-    input: Omit<CareerCandidateAccount, 'id' | 'createdAt'>
-  ): { success: boolean; candidate?: CareerCandidateAccount; error?: string } => {
-    const existing = state.careerCandidates || [];
-    const normalizedEmail = input.email.trim().toLowerCase();
-    if (existing.some((c) => c.email.toLowerCase() === normalizedEmail)) {
-      return {
-        success: false,
-        error: tr(
-          'এই ইমেইল দিয়ে ইতিমধ্যেই একটি অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-          'An account with this email already exists. Please sign in.',
-          'يوجد حساب مسجل بهذا البريد بالفعل.'
-        ),
-      };
-    }
-    const candidate: CareerCandidateAccount = {
-      ...input,
-      email: normalizedEmail,
-      id: `cand-${Date.now()}`,
-      createdAt: new Date().toISOString().slice(0, 10),
-    };
-    setState((prev) => ({
-      ...prev,
-      careerCandidates: [candidate, ...(prev.careerCandidates || [])],
-    }));
-    pushToast(
-      tr('প্রার্থী অ্যাকাউন্ট তৈরি হয়েছে!', 'Candidate Account Created!', 'تم إنشاء حساب المتقدم!'),
-      candidate.fullName
-    );
-    return { success: true, candidate };
-  };
-
   // Users & Roles CRUD
+  // The form's plaintext password reaches the server only inside the sync op (hashed there) and
+  // is stripped from memory once that op is confirmed (see useServerSync / stripConfirmedSecrets).
   const addAdminUser = (user: Omit<AdminUser, 'id' | 'createdAt'>) => {
     const newUser: AdminUser = {
       ...user,
@@ -1804,18 +1836,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const updateWhatsAppConfig = (whatsappConfig: WhatsAppBotConfig) => {
-    setState((prev) => ({ ...prev, whatsappConfig }));
-    pushToast(
-      tr('হোয়াটসঅ্যাপ বট সংরক্ষিত', 'WhatsApp Bot Saved', 'تم حفظ إعدادات واتساب'),
-      tr(
-        'হোয়াটসঅ্যাপ বট ও কুইক টপিকসমূহ সফলভাবে আপডেট করা হয়েছে।',
-        'WhatsApp bot & quick inquiry topics updated.',
-        'تم تحديث بوت واتساب والمواضيع السريعة بنجاح.'
-      )
-    );
-  };
-
   const updateFeeCalculatorConfig = (feeCalculatorConfig: FeeCalculatorConfig) => {
     setState((prev) => ({ ...prev, feeCalculatorConfig }));
     pushToast(
@@ -1940,18 +1960,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const updateHifzTreeConfig = (hifzTreeConfig: HifzTreeConfig) => {
-    setState((prev) => ({ ...prev, hifzTreeConfig }));
-    pushToast(
-      tr('হিফজুল কুরআন ট্রি আপডেট হয়েছে', 'Hifzul Quran Tree Updated', 'تم تحديث شجرة حفاظ القرآن'),
-      tr(
-        'হাফেজদের বংশবৃক্ষ ও সম্মাননা তথ্য সংরক্ষিত হয়েছে।',
-        'Hifzul Quran lineage and graduate records saved.',
-        'تم حفظ بيانات حفاظ القرآن الكريم بنجاح.'
-      )
-    );
-  };
-
   const addHafizGraduate = (item: Omit<HafizGraduateItem, 'id'>) => {
     const newItem: HafizGraduateItem = {
       ...item,
@@ -2045,7 +2053,14 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importFullCMSState = (newState: CMSState, summaryMessage?: string) => {
-    setState(newState);
+    const excluded = fullReplaceExclusions();
+    // Keys this role may not replace keep their current values, locally and on the server.
+    setState((prev) => {
+      const next: Record<string, unknown> = { ...newState };
+      for (const key of excluded) next[key] = prev[key];
+      return next as unknown as CMSState;
+    });
+    sync.requestFullReplace(excluded);
     pushToast(
       tr(
         'প্রতিষ্ঠানের ডাটা সফলভাবে আপডেট হয়েছে',
@@ -2169,29 +2184,14 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const submitGuardianComplaint = (
+  const submitGuardianComplaint = async (
     item: Omit<GuardianComplaintItem, 'id' | 'submittedAt' | 'status'>
-  ) => {
-    const nowFormatted = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    const newItem: GuardianComplaintItem = {
-      ...item,
-      id: `comp-${Date.now()}`,
-      submittedAt: nowFormatted,
-      status: 'New',
-    };
-    setState((prev) => ({
-      ...prev,
-      complaints: [newItem, ...(prev.complaints || [])],
-    }));
+  ): Promise<SubmitOutcome> => {
+    const res = await sync.submitPublic([{ key: 'complaints', item: { ...item, id: `comp-${Date.now()}` } }]);
+    if (!res.ok) return { ok: false, error: publicSubmitError(res) };
     pushToast(
       tr(
-        'অভিযোগ / পরামর্শ গৃহীত হয়েছে',
+        'অভিযোগ / পরামর্শ গৃহীত হয়েছে',
         'Feedback / Suggestion Received',
         'تم استلام الملاحظة / الاقتراح'
       ),
@@ -2201,6 +2201,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         'تم إرسال ملاحظاتكم مباشرة إلى إدارة المعهد.'
       )
     );
+    return { ok: true };
   };
 
   const updateComplaintStatus = (
@@ -2232,104 +2233,31 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const applyTargetInstitutionPreset = (preset: 'maharat' | 'craft') => {
-    if (preset === 'maharat') {
-      setState((prev) => buildMaharatModelMadrasahPreset(prev));
-      pushToast(
-        tr(
-          'মাহারাত মডেল মাদ্রাসা প্রিসেট চালু হয়েছে!',
-          'Maharat Model Madrasah Preset Activated!',
-          'تم تفعيل إعدادات مدرسة مهارات النموذجية!'
-        ),
-        tr(
-          'ওয়েবসাইটের নাম, স্লোগান, উত্তরা সেক্টর ১২ ঠিকানা, ফোন ও প্রেক্ষাপট মাহারাত মডেল মাদ্রাসায় রূপান্তরিত হয়েছে।',
-          'Branding, slogan, Uttara Sector 12 address, phone, and context switched to Maharat Model Madrasah.',
-          'تم تحويل العلامة التجارية والعنوان والبيانات إلى مدرسة مهارات النموذجية.'
-        )
-      );
-    } else {
-      setState((prev) => ({
-        ...prev,
-        settings: INITIAL_CMS_STATE.settings,
-        madrasahContextConfig: {
-          ...prev.madrasahContextConfig,
-          activePresetId: 'craft',
-        },
-      }));
-      pushToast(
-        tr(
-          'ক্রাফট ইনস্টিটিউট প্রিসেট চালু হয়েছে!',
-          'Craft International Institute Preset Restored!',
-          'تم تفعيل إعدادات معهد كرافت الدولي!'
-        ),
-        tr(
-          'ওয়েবসাইটের ব্র্যান্ডিং ক্রাফট ইন্টারন্যাশনাল ইনস্টিটিউটে ফিরিয়ে আনা হয়েছে।',
-          'Website branding restored to Craft International Institute.',
-          'تمت استعادة العلامة التجارية لمعهد كرافت الدولي.'
-        )
-      );
-    }
-  };
-
-  const syncLocalToLiveServer = async (silent: boolean = false): Promise<boolean> => {
-    const ok = await pushStateToServer(stateRef.current);
-    if (!silent) {
-      if (ok) {
-        pushToast(
-          tr(
-            'লাইভ সার্ভারে সকল তথ্য সিঙ্ক হয়েছে!',
-            'All Data Synced to Live Server!',
-            'تمت مزامنة جميع البيانات مع الخادم المباشر!'
-          ),
-          tr(
-            'আপনার লোকাল ও ডিপ্লয়মেন্টের সকল তথ্য এখন যে কেউ শেয়ার্ড লিংক থেকে লাইভ দেখতে পারবেন।',
-            'All local and deployment updates are now live and accessible to everyone via the shared URL.',
-            'جميع التحديثات متاحة الآن مباشرة للجميع عبر الرابط المشترك.'
-          )
-        );
-      } else {
-        pushToast(
-          tr('সার্ভার সিঙ্ক ব্যর্থ হয়েছে', 'Live Server Sync Failed', 'فشلت المزامنة مع الخادم'),
-          tr('অনুগ্রহ করে ইন্টারনেট কানেকশন বা সার্ভার স্ট্যাটাস চেক করুন।', 'Please verify server connection.', 'يرجى التحقق من الاتصال بالخادم.'),
-          'info'
-        );
-      }
-    }
-    return ok;
+  const applyTargetInstitutionPreset = () => {
+    setState((prev) => buildMaharatModelMadrasahPreset(prev));
+    pushToast(
+      tr(
+        'মাহারাত মডেল মাদ্রাসা প্রিসেট চালু হয়েছে!',
+        'Maharat Model Madrasah Preset Activated!',
+        'تم تفعيل إعدادات مدرسة مهارات النموذجية!'
+      ),
+      tr(
+        'ওয়েবসাইটের নাম, স্লোগান, উত্তরা সেক্টর ১২ ঠিকানা, ফোন ও প্রেক্ষাপট মাহারাত মডেল মাদ্রাসায় রূপান্তরিত হয়েছে।',
+        'Branding, slogan, Uttara Sector 12 address, phone, and context switched to Maharat Model Madrasah.',
+        'تم تحويل العلامة التجارية والعنوان والبيانات إلى مدرسة مهارات النموذجية.'
+      )
+    );
   };
 
   const pullFromLiveServer = async (silent: boolean = false): Promise<boolean> => {
-    try {
-      setLiveSyncStatus((prev) => ({ ...prev, status: 'syncing' }));
-      const res = await fetch('/api/cms-state');
-      if (!res.ok) {
-        setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-        return false;
-      }
-      const data = await res.json();
-      if (data?.hasServerState && data?.state) {
-        isApplyingServerUpdateRef.current = true;
-        const merged = mergeLiveCMSState(data.state, INITIAL_CMS_STATE);
-        serverVersionRef.current = Number(data.version) || serverVersionRef.current;
-        setState(merged);
-        setLiveSyncStatus({
-          status: 'synced',
-          version: serverVersionRef.current,
-          lastSyncedAt: data.updatedAt || new Date().toISOString(),
-        });
-        if (!silent) {
-          pushToast(
-            tr('লাইভ সার্ভার থেকে সর্বশেষ তথ্য লোড হয়েছে', 'Pulled Latest Live Server Data', 'تم جلب أحدث البيانات من الخادم'),
-            `Version #${serverVersionRef.current}`
-          );
-        }
-        return true;
-      }
-      return false;
-    } catch {
-      setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-      return false;
+    const ok = await sync.refetch();
+    if (ok && !silent) {
+      pushToast(
+        tr('লাইভ সার্ভার থেকে সর্বশেষ তথ্য লোড হয়েছে', 'Pulled Latest Live Server Data', 'تم جلب أحدث البيانات من الخادم'),
+        `Version #${sync.currentVersion()}`
+      );
     }
+    return ok;
   };
 
   const enableAllWebsiteSections = () => {
@@ -2534,23 +2462,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const markAdmissionTokenApplied = (tokenId: string, leadId?: string) => {
-    const nowIso = new Date().toISOString();
-    setState((prev) => ({
-      ...prev,
-      admissionTokens2027: (prev.admissionTokens2027 || []).map((t) =>
-        t.id === tokenId
-          ? {
-              ...t,
-              status: 'Applied',
-              appliedLeadId: leadId || t.appliedLeadId,
-              appliedAt: nowIso,
-            }
-          : t
-      ),
-    }));
-  };
-
   // --- Blog & Automation API CRUD ---
   const addBlogPost = (post: Omit<BlogPostItem, 'id'>): BlogPostItem => {
     const created: BlogPostItem = {
@@ -2603,7 +2514,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  // --- Institutional Academic Calendar CRUD + Google Sync ---
+  // --- Institutional Academic Calendar CRUD ---
   const addCalendarEvent = (
     ev: Omit<InstitutionalCalendarEvent, 'id'>
   ): InstitutionalCalendarEvent => {
@@ -2643,29 +2554,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const mergeGoogleCalendarEvents = (incoming: InstitutionalCalendarEvent[]): number => {
-    const existing = stateRef.current.calendarEvents || [];
-    const existingKeys = new Set(
-      existing.map((e) => e.googleEventId || `${e.date}::${e.titleEn.toLowerCase()}`)
-    );
-    const uniqueNew = incoming.filter((e) => {
-      const key = e.googleEventId || `${e.date}::${e.titleEn.toLowerCase()}`;
-      if (existingKeys.has(key)) return false;
-      existingKeys.add(key);
-      return true;
-    });
-
-    if (uniqueNew.length > 0) {
-      setState((prev) => ({
-        ...prev,
-        calendarEvents: [...(prev.calendarEvents || []), ...uniqueNew].sort((a, b) =>
-          a.date.localeCompare(b.date)
-        ),
-      }));
-    }
-    return uniqueNew.length;
-  };
-
   // --- Mobile App-Style Bottom Bar Config ---
   const updateMobileBottomBar = (config: MobileBottomBarConfig) => {
     setState((prev) => ({
@@ -2691,15 +2579,13 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const recordLocalVirtualOfficeSession = (session: VirtualOfficeSession) => {
-    setState((prev) => {
-      const existing = prev.virtualOfficeSessions || [];
-      if (existing.some((s) => s.id === session.id)) return prev;
-      return {
-        ...prev,
-        virtualOfficeSessions: [session, ...existing].slice(0, 200),
-      };
-    });
+  /**
+   * The check-in endpoint has already stored the session and its lead on the server. Signed-in
+   * staff reload state to see them; visitors never hold sessions locally (private data). Adding
+   * the session locally would make the sync layer re-send it as a staff write.
+   */
+  const recordLocalVirtualOfficeSession = (_session: VirtualOfficeSession) => {
+    if (currentUser) void sync.refetch({ background: true });
   };
 
   const updateVirtualOfficeSessionStatus = (
@@ -2738,7 +2624,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         theme,
         toggleTheme,
-        setTheme,
         language,
         setLanguage,
         fontSize,
@@ -2749,11 +2634,14 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dismissToast,
         pushToast,
         liveSyncStatus,
-        syncLocalToLiveServer,
         pullFromLiveServer,
         enableAllWebsiteSections,
         login,
-        loginWithGoogleProfile,
+        mustChangePassword,
+        changePassword,
+        storageMode,
+        demoAccounts,
+        loginSetup,
         updateCurrentUserProfile,
         logout,
         uploadAndStoreLogo,
@@ -2773,6 +2661,7 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateEvent,
         deleteEvent,
         submitInquiry,
+        publicSubmitError,
         updateLeadStatus,
         updateLeadCourse,
         deleteLead,
@@ -2781,7 +2670,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         scheduleLeadFollowUp,
         updateLeadPriority,
         bulkImportLeads,
-        updateLeadDetailedAdmission,
         updateLeadChecklist,
         updateLeadCounselor,
         addCareerJob,
@@ -2790,7 +2678,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitCareerApplication,
         updateCareerApplicationStatus,
         deleteCareerApplication,
-        registerCareerCandidate,
         addAdminUser,
         updateAdminUserRole,
         deleteAdminUser,
@@ -2802,7 +2689,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateSettings,
         updatePopupConfig,
         updateAIBotConfig,
-        updateWhatsAppConfig,
         updateFeeCalculatorConfig,
         updateCampusVideo,
         updateDepartmentVideo,
@@ -2813,7 +2699,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateGuardianReel,
         deleteGuardianReel,
         clearAllVideoLinks,
-        updateHifzTreeConfig,
         addHafizGraduate,
         updateHafizGraduate,
         deleteHafizGraduate,
@@ -2839,7 +2724,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAdmissionToken,
         updateAdmissionToken,
         deleteAdmissionToken,
-        markAdmissionTokenApplied,
         addBlogPost,
         updateBlogPost,
         deleteBlogPost,
@@ -2847,7 +2731,6 @@ export const CMSProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCalendarEvent,
         updateCalendarEvent,
         deleteCalendarEvent,
-        mergeGoogleCalendarEvents,
         updateMobileBottomBar,
         updateVirtualOfficeConfig,
         recordLocalVirtualOfficeSession,

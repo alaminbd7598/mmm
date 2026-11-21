@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, type Variants } from 'motion/react';
 import {
   ArrowLeft,
@@ -6,44 +6,32 @@ import {
   ArrowUp,
   BookOpen,
   Briefcase,
-  Bus,
-  Calculator,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Code2,
-  Compass,
-  Copy,
   Cpu,
   Download,
   ExternalLink,
   Facebook,
   FileText,
-  Gift,
-  GitBranch,
   Globe,
   GraduationCap,
   HeartHandshake,
-  Home,
-  Image as ImageIcon,
+
   Layers,
   Mail,
   MapPin,
   Megaphone,
   Menu,
   MessageCircle,
-  Monitor,
   Pause,
   Phone,
   Play,
   Send,
-  Share2,
-  Smartphone,
   Sparkles,
-  Video,
   X,
   Youtube,
 } from 'lucide-react';
@@ -59,7 +47,6 @@ import {
 import {
   filterNotices,
   hasValidVideoUrl,
-  toBengaliDigits,
   validateInquiryInput,
 } from '../utils/cmsLogic';
 import {
@@ -70,6 +57,7 @@ import {
   PublicPageId,
   resolvePageFromPath,
 } from '../utils/i18nContent';
+import { titleForPath } from '../app/seo';
 import { resolveVersionManagerConfig, shouldShowPublicVersion } from '../utils/versionLogic';
 import { AdmissionFormModal } from './AdmissionFormModal';
 import { AdmissionPopupModal } from './AdmissionPopupModal';
@@ -131,80 +119,6 @@ const sectionRevealVariants: Variants = {
     },
   },
 };
-
-const staggerContainerVariants: Variants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.08,
-      delayChildren: 0.05,
-    },
-  },
-};
-
-const cardItemVariants: Variants = {
-  hidden: { opacity: 0, y: 18 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: {
-      duration: 0.45,
-      ease: [0.16, 1, 0.3, 1],
-    },
-  },
-};
-
-const SOCIAL_CONNECT_COPY = {
-  bn: {
-    badge: 'সোশ্যাল মিডিয়া ও লোকেশন নেটওয়ার্ক',
-    title: 'মাহারাত মডেল মাদ্রাসার অফিশিয়াল কমিউনিটিতে যুক্ত থাকুন',
-    subtitle:
-      'প্রতিদিনের ক্লাস আপডেট, হিফজ তিলাওয়াত, নোটিশ, বিজ্ঞান মেলা ও উত্তরা সেক্টর-১২ ক্যাম্পাস লোকেশন পেতে আমাদের অফিশিয়াল চ্যানেলগুলোতে যুক্ত হোন।',
-    platforms: {
-      facebook: { name: 'Facebook Page', handle: '@maharatmodelmadrasah', action: 'Follow Page' },
-      youtube: { name: 'YouTube Channel', handle: '@maharatmodelmadrasa', action: 'Subscribe' },
-      whatsapp: { name: 'WhatsApp Helpline', handle: '01886-340308', action: 'Chat Now' },
-      linkedin: { name: 'LinkedIn Official', handle: 'Maharat Foundation & Madrasah', action: 'Connect' },
-      instagram: { name: 'Instagram', handle: 'ক্যাম্পাস লাইফ ও অ্যাক্টিভিটি রিলস', action: 'Follow' },
-      twitter: { name: 'X (Twitter)', handle: 'তাৎক্ষণিক ঘোষণা ও আপডেট', action: 'Follow X' },
-      telegram: { name: 'Telegram Channel', handle: 'নোটিশ পিডিএফ ও ই-প্রসপেক্টাস', action: 'Join Channel' },
-      maps: { name: 'Google Maps Location', handle: 'বাড়ি-৭, রোড-১৭/এ, সেক্টর-১২, উত্তরা', action: 'Open Map' },
-    },
-  },
-  en: {
-    badge: 'Official Social & Location Network',
-    title: 'Stay Connected With Maharat Model Madrasah',
-    subtitle:
-      'Follow our official social channels for daily campus updates, Tahfiz recitations, circulars, science fairs, and direct Uttara Sector-12 navigation.',
-    platforms: {
-      facebook: { name: 'Facebook Page', handle: '@maharatmodelmadrasah', action: 'Follow Page' },
-      youtube: { name: 'YouTube Channel', handle: '@maharatmodelmadrasa', action: 'Subscribe' },
-      whatsapp: { name: 'WhatsApp Helpline', handle: '01886-340308', action: 'Chat Now' },
-      linkedin: { name: 'LinkedIn Official', handle: 'Maharat Foundation Network', action: 'Connect' },
-      instagram: { name: 'Instagram', handle: 'Campus Life & Student Highlights', action: 'Follow' },
-      twitter: { name: 'X (Twitter)', handle: 'Official Announcements & News', action: 'Follow X' },
-      telegram: { name: 'Telegram Channel', handle: 'Notice PDFs & e-Prospectus', action: 'Join Channel' },
-      maps: { name: 'Google Maps Location', handle: 'House-7, Road-17/A, Sector-12, Uttara', action: 'Open Map' },
-    },
-  },
-  ar: {
-    badge: 'شبكة التواصل الاجتماعي والموقع الرسمي',
-    title: 'تواصلوا مع مدرسة المهارات النموذجية',
-    subtitle:
-      'تابعوا قنواتنا الرسمية للاطلاع على التحديثات اليومية، تلاوات القرآن الكريم، الإعلانات الرسمية، وموقع الحرم التعليمي في أوتارا قطاع ١٢.',
-    platforms: {
-      facebook: { name: 'صفحة فيسبوك', handle: '@maharatmodelmadrasah', action: 'تابع الصفحة' },
-      youtube: { name: 'قناة يوتيوب', handle: '@maharatmodelmadrasa', action: 'اشترك الآن' },
-      whatsapp: { name: 'واتساب للقبول', handle: '01886-340308', action: 'تحدث الآن' },
-      linkedin: { name: 'لينكد إن الرسمي', handle: 'مؤسسة ومدرسة المهارات', action: 'تواصل معنا' },
-      instagram: { name: 'إنستغرام', handle: 'أنشطة الطلاب والحياة المدرسية', action: 'متابعة' },
-      twitter: { name: 'منصة X (تويتر)', handle: 'الأخبار والإعلانات العاجلة', action: 'متابعة' },
-      telegram: { name: 'قناة تيليجرام', handle: 'ملفات PDF والنشرة التعريفية', action: 'انضم للقناة' },
-      maps: { name: 'موقع خرائط جوجل', handle: 'منزل ٧، طريق ١٧/أ، قطاع ١٢، أوتارا', action: 'افتح الخريطة' },
-    },
-  },
-} as const;
 
 const NOTICE_CATEGORIES: ('All' | NoticeCategory)[] = [
   'All',
@@ -713,7 +627,7 @@ const FAQ_DATA = [
 ];
 
 export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => {
-  const { state, currentUser, submitInquiry, language, t, pushToast } = useCMS();
+  const { state, submitInquiry, language, t, pushToast } = useCMS();
   const {
     settings,
     news,
@@ -753,6 +667,13 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Keep the browser-tab title in step with in-app navigation (the server sets it on full loads).
+  // An open blog article sets its own title in BlogPortalPage.
+  useEffect(() => {
+    const readingPost = currentPage === 'blog' && new URLSearchParams(window.location.search).has('post');
+    if (!readingPost) document.title = titleForPath(PAGE_PATH_MAP[currentPage] || '/');
+  }, [currentPage]);
 
   const handleCloseVerifyCert = () => {
     setVerifyCertCode(null);
@@ -966,8 +887,10 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     setIsAdmissionModalOpen(true);
   };
 
-  const handleQuickInquirySubmit = (e: React.FormEvent) => {
+  const inquiryBusyRef = useRef(false);
+  const handleQuickInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inquiryBusyRef.current) return;
     const validation = validateInquiryInput(
       {
         name: inqName,
@@ -992,7 +915,8 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     }
 
     setInqError('');
-    const emailDispatched = submitInquiry({
+    inquiryBusyRef.current = true;
+    const result = await submitInquiry({
       name: inqName.trim(),
       phone: inqPhone.trim(),
       email: inqEmail.trim(),
@@ -1000,6 +924,14 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
       message: inqMessage.trim() || 'Submitted via Public Website Online Admission & Inquiry Form.',
       source: 'Quick Inquiry',
     });
+    inquiryBusyRef.current = false;
+    // The success message is shown only once the server has stored the inquiry.
+    if (!result.ok) {
+      setInqError(result.error);
+      setInqSuccess(null);
+      return;
+    }
+    const emailDispatched = result.emailLog;
 
     setInqSuccess(
       language === 'bn'
@@ -1139,149 +1071,12 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
     setPlayingVideoModal(videoItem);
   };
 
-  const HOME_PORTAL_CARDS: {
-    page: PublicPageId;
-    badge: Record<'bn' | 'en' | 'ar', string>;
-    title: Record<'bn' | 'en' | 'ar', string>;
-    desc: Record<'bn' | 'en' | 'ar', string>;
-    icon: React.ReactNode;
-    accentClass: string;
-  }[] = [
-    {
-      page: 'hifz-tree',
-      badge: { bn: '১ম – ২৪তম হাফেজ', en: '24 Huffaz Lineage', ar: '٢٤ حافظاً للقرآن' },
-      title: {
-        bn: 'হিফজুল কুরআন ট্রি (হাফেজদের বংশবৃক্ষ ও সম্মাননা)',
-        en: 'Hifzul Quran Tree (Lineage of 24 Huffaz)',
-        ar: 'شجرة حفاظ القرآن الكريم (١ – ٢٤ حافظاً)',
-      },
-      desc: {
-        bn: 'মাদ্রাসার সূচনালগ্ন থেকে ১ম হাফেজ থেকে ২৪তম হাফেজ আহসানুদ্দিন পর্যন্ত ধারাবাহিক তালিকা, কক্সবাজার বিমান ভ্রমণ পুরস্কার ও শেয়ারিং।',
-        en: 'Explore the complete chronological chain of Huffaz from the 1st to the 24th graduate with social sharing.',
-        ar: 'سلسلة حفاظ القرآن الكريم من الحافظ الأول حتى الحافظ الرابع والعشرين مع إمكانية المشاركة.',
-      },
-      icon: <GitBranch className="w-6 h-6" />,
-      accentClass: 'from-amber-500 to-purple-800',
-    },
-    {
-      page: 'gallery',
-      badge: { bn: '১০০% দাখিল ফলাফল ও অ্যালবাম', en: 'Framed Photo Gallery', ar: 'معرض الصور والإنجازات' },
-      title: {
-        bn: 'ফটো গ্যালারি, বোর্ড ফলাফল ও ইভেন্ট আর্কাইভ',
-        en: 'Categorized Photo Gallery & Board Results',
-        ar: 'معرض الصور ونتائج الامتحانات والأنشطة',
-      },
-      desc: {
-        bn: 'দাখিল পরীক্ষায় ১০০% শতভাগ পাস (৫ জন A+), ৭ম সবক অনুষ্ঠান (৯৬ জন), শিক্ষাসফর ও মাহারাত পত্রিকার ফ্রেমড গ্যালারি।',
-        en: '100% Dakhil Pass Result (5 GPA 5.00), 7th Sabak Ceremony, Study Tour, and Maharat Magazine in a framed lightbox.',
-        ar: 'نتائج امتحان الداخل بنسبة نجاح ١٠٠٪، حفل السبق السابع، والرحلات العلمية في إطار منبثق.',
-      },
-      icon: <ImageIcon className="w-6 h-6" />,
-      accentClass: 'from-fuchsia-600 to-purple-800',
-    },
-    {
-      page: 'education-method',
-      badge: { bn: '৫০/৫০ কারিকুলাম', en: '50/50 Methodology', ar: 'منهجية ٥٠/٥٠' },
-      title: {
-        bn: 'শিক্ষা পদ্ধতি ৫০/৫০ ও বিষয়ের ভারসাম্য',
-        en: '50/50 Education Method & Subject Balance',
-        ar: 'منهج التعليم ٥٠/٥٠ وتوازن المواد',
-      },
-      desc: {
-        bn: 'প্রি-হিফজ, হিফজ ও আফটার হিফজ—তিন স্তরে কুরআন, আরবি ও সাধারণ শিক্ষার ইন্টারঅ্যাক্টিভ শতকরা অনুপাত।',
-        en: 'Interactive subject percentage breakdown across Pre-Hifz, Hifz, and After-Hifz stages.',
-        ar: 'التوزيع التفاعلي لنسب القرآن والعربية والعلوم العامة عبر المراحل الثلاث.',
-      },
-      icon: <Layers className="w-6 h-6" />,
-      accentClass: 'from-purple-700 to-fuchsia-600',
-    },
-    {
-      page: 'ten-year-plan',
-      badge: { bn: '১০ বছরের রোডম্যাপ', en: '10-Year Master Plan', ar: 'خطة ١٠ سنوات' },
-      title: {
-        bn: 'নার্সারি থেকে একাদশ: ১০ বছরের পাঠ পরিকল্পনা',
-        en: 'Nursery to Grade 11: 10-Year Academic Roadmap',
-        ar: 'من الروضة إلى الحادي عشر: الخطة العشرية',
-      },
-      desc: {
-        bn: '১ম শ্রেণি থেকে দাখিল ও মুতাওয়াসসিতা পর্যন্ত কুরআন, আরবি, ইসলাম ও সাধারণ শিক্ষার পূর্ণাঙ্গ ছক।',
-        en: 'Complete 13-column progression matrix covering Quran, Arabic, Islamic Studies, Dakhil & Mutawassitah.',
-        ar: 'مصفوفة متكاملة توضح مسار الطالب من الروضة حتى شهادة الداخل والمتوسطة.',
-      },
-      icon: <GraduationCap className="w-6 h-6" />,
-      accentClass: 'from-[#2e0249] to-purple-700',
-    },
-    {
-      page: 'daycare-routine',
-      badge: { bn: 'সকাল ৭:০০ – রাত ৮:৩০', en: '7:00 AM – 8:30 PM', ar: '٧:٠٠ ص – ٨:٣٠ م' },
-      title: {
-        bn: 'হিফজ ডে-কেয়ারের একটি দিন ও সময়সূচি',
-        en: 'A Day in Hifz Day-Care & Schedule',
-        ar: 'الجدول اليومي لرعاية وتحفيظ القرآن',
-      },
-      desc: {
-        bn: 'সকাল, দুপুর, বিকাল ও রাতের ৪ প্রহরের রুটিন, খাবার, বিশ্রাম (কায়লুলাহ) এবং ধাপভেদে মাদরাসার সময়।',
-        en: 'Full-day supervised schedule covering Sabaq, academic classes, nutritious meals, midday rest, and sports.',
-        ar: 'تفاصيل البرنامج اليومي للحفظ والدراسة والوجبات الصحية والقيلولة والرياضة.',
-      },
-      icon: <Clock className="w-6 h-6" />,
-      accentClass: 'from-fuchsia-600 to-amber-500',
-    },
-    {
-      page: 'transport',
-      badge: { bn: 'উত্তরা ও মিরপুর রুট', en: 'Uttara & Mirpur Fleet', ar: 'مسارات النقل الخاص' },
-      title: {
-        bn: 'নিজস্ব পরিবহন রুট ম্যাপ ও মেট্রোরেল দূরত্ব',
-        en: 'Own Transport Routes & Metro Rail Distance',
-        ar: 'النقل المدرسي الخاص والمسافة من المترو',
-      },
-      desc: {
-        bn: 'মাদ্রাসার নিজস্ব মাইক্রোবাস রুট, স্টপেজ সমূহ, দূরত্ব অনুযায়ী মাসিক ভাড়া ক্যালকুলেটর ও ল্যান্ডমার্ক গাইড।',
-        en: 'Stop-by-stop route steppers, custom distance fare estimator, and distance from Uttara Metro Station.',
-        ar: 'خريطة محطات الحافلات وحاسبة الرسوم حسب المسافة والموقع من محطة المترو.',
-      },
-      icon: <Bus className="w-6 h-6" />,
-      accentClass: 'from-purple-800 to-indigo-700',
-    },
-    {
-      page: 'fees',
-      badge: { bn: 'অফিসিয়াল A4 প্রাক্কলন', en: 'Interactive Calculator', ar: 'حاسبة الرسوم' },
-      title: {
-        bn: 'ফি কাঠামো ও ইন্টারঅ্যাক্টিভ ফি ক্যালকুলেটর',
-        en: 'Fee Structure & Interactive Cost Calculator',
-        ar: 'هيكل الرسوم والحاسبة التفاعلية',
-      },
-      desc: {
-        bn: 'শ্রেণি, আবাসন, পরিবহন ও সহোদর ছাড়সহ তাৎক্ষণিক হিসাব এবং অফিসিয়াল A4 লেটারহেড PDF ডাউনলোড।',
-        en: 'Calculate net admission & monthly tuition with discounts and download an official A4 Letterhead PDF.',
-        ar: 'احسب الرسوم الصافية مع الخصومات وحمّل كشف التكاليف الرسمي بصيغة PDF.',
-      },
-      icon: <Calculator className="w-6 h-6" />,
-      accentClass: 'from-amber-500 to-fuchsia-600',
-    },
-    {
-      page: 'curriculum',
-      badge: { bn: '১২ আইটি + ৫০ সফট স্কিলস', en: '6 Pillars + 62 Skills', ar: 'المنهج والمهارات' },
-      title: {
-        bn: '৬-স্তম্ভ কারিকুলাম, আইটি ও সফট স্কিলস',
-        en: '6-Pillar Curriculum, IT & Life Skills',
-        ar: 'المنهج السداسي ومهارات التقنية والحياة',
-      },
-      desc: {
-        bn: 'ইসলামিক ও একাডেমিক শিক্ষার পাশাপাশি গ্রাফিক ডিজাইন, কোডিং, রোবটিক্স, এআই ও পাবলিক স্পিকিং প্রশিক্ষণ।',
-        en: 'Explore our 6 educational pillars, 12 practical IT lab tracks, and 50+ personal & entrepreneurship skills.',
-        ar: 'استكشف أركان المنهج الستة و١٢ مساراً تقنياً وأكثر من ٥٠ مهارة قيادية.',
-      },
-      icon: <Cpu className="w-6 h-6" />,
-      accentClass: 'from-purple-700 to-purple-950',
-    },
-  ];
-
   // Find active dropdown group & item for inner-page breadcrumb header
   const activeGroupForPage = HEADER_NAV_GROUPS.find(
     (g) => g.directPage === currentPage || g.items?.some((it) => it.page === currentPage)
   );
   const activeNavItem = activeGroupForPage?.items?.find((it) => it.page === currentPage);
+  const BannerTitle = currentPage === 'blog' ? 'p' : 'h1';
 
   return (
     <div
@@ -1820,11 +1615,12 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
             </div>
 
             <div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
+              {/* The blog renders its own page / article heading, so its banner title is not a second h1. */}
+              <BannerTitle className="text-2xl sm:text-3xl font-extrabold text-white">
                 {activeNavItem
                   ? activeNavItem.title[language]
                   : activeGroupForPage?.label[language]}
-              </h1>
+              </BannerTitle>
               {activeNavItem && (
                 <p className="text-xs sm:text-sm text-sky-100/85 mt-1">
                   {activeNavItem.subtitle[language]}
@@ -3820,7 +3616,7 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
                     </div>
 
                     {inqError && (
-                      <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+                      <div role="alert" className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
                         {inqError}
                       </div>
                     )}

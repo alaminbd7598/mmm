@@ -20,6 +20,7 @@ import {
 import { useCMS } from '../store/useCMSStore';
 import type { BlogAutomationConfig, BlogPostItem, BlogPostStatus } from '../types/cms';
 import { hasRolePermission } from '../utils/cmsLogic';
+import { safeImageUrl } from '../utils/safeUrl';
 
 type EditorLang = 'bn' | 'en' | 'ar';
 type StatusFilter = 'all' | BlogPostStatus;
@@ -119,16 +120,6 @@ const MARKDOWN_COMPONENTS: Components = {
 const todayIso = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-/** Only same-site paths, http(s) and inline raster images may be used as a cover image. */
-const safeImageUrl = (value: string | undefined | null): string => {
-  const url = String(value || '').trim();
-  if (!url) return '';
-  if (/^https?:\/\//i.test(url)) return url;
-  if (/^data:image\/(png|jpe?g|webp|gif|avif);base64,/i.test(url)) return url;
-  if (url.startsWith('/') && !url.startsWith('//')) return url;
-  return '';
 };
 
 /** Plain-text excerpt from a markdown body (used when no excerpt was typed). */

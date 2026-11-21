@@ -256,8 +256,10 @@ export async function generateHafizCertificatePdf(opts: HafizCertificatePdfOptio
   const { grad, totalHuffaz, users } = opts;
   if (!grad) throw new Error('Hafiz graduate record is required to generate a certificate.');
 
+  // The QR must point at the public site even when the PDF is made on a preview or internal host.
+  const configuredOrigin = /^https?:\/\//i.test(process.env.NEXT_PUBLIC_APP_URL || '') ? process.env.NEXT_PUBLIC_APP_URL : '';
   const browserOrigin = typeof window !== 'undefined' ? window.location?.origin : '';
-  const origin = (opts.origin || browserOrigin || DEFAULT_ORIGIN).replace(/\/+$/, '');
+  const origin = (opts.origin || configuredOrigin || browserOrigin || DEFAULT_ORIGIN).replace(/\/+$/, '');
   const code = resolveVerifiableCertificateCode(grad);
   const verifyUrl = `${origin}/?verify-cert=${encodeURIComponent(code)}`;
 

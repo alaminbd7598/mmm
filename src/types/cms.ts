@@ -365,7 +365,7 @@ export interface CareerCandidateAccount {
   fullName: string;
   email: string;
   phone: string;
-  password: string;
+  password?: string;
   createdAt: string;
 }
 

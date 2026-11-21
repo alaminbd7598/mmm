@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   Bot,
   Briefcase,
@@ -13,11 +14,11 @@ import {
   ExternalLink,
   Eye,
   FileCheck2,
-  FileSpreadsheet,
   FileText,
   Gift,
   GitBranch,
   Globe,
+  KeyRound,
   GraduationCap,
   Image,
   LayoutDashboard,
@@ -31,9 +32,7 @@ import {
   Plus,
   Radio,
   Receipt,
-  RefreshCw,
   Save,
-  Search,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -48,8 +47,9 @@ import {
   X,
 } from 'lucide-react';
 import { generateAdmissionPDF } from '../utils/pdfExport';
-import { exportRegistrationsToCSV } from '../utils/exportUtils';
+import { validateNewPassword } from '../utils/passwordPolicy';
 import { useCMS } from '../store/useCMSStore';
+import { MIN_PASSWORD_LENGTH } from '../server/contracts';
 import {
   AIBotConfig,
   AdminRole,
@@ -60,7 +60,6 @@ import {
   EventItem,
   FeeCalculatorConfig,
   LEAD_STATUS_OPTIONS,
-  LeadStatus,
   MobileBottomBarSlotTarget,
   NoticeCategory,
   NoticeItem,
@@ -71,10 +70,10 @@ import {
 import {
   AdminTabId,
   canAccessAdminResource,
-  filterLeads,
   hasRolePermission,
+  toBengaliDigits,
 } from '../utils/cmsLogic';
-import { localizeDynamicText } from '../utils/textLocalizer';
+import { localizeDynamicText } from '../utils/i18nContent';
 import { EnrollmentTrendsChart } from './EnrollmentTrendsChart';
 import { AccessibilityToolbar } from './AccessibilityToolbar';
 import { AdminMadrasahInfographicsTab } from './AdminMadrasahInfographicsTab';
@@ -93,6 +92,7 @@ import { AdminCalendarTab } from './AdminCalendarTab';
 import { AdminBlogTab } from './AdminBlogTab';
 import { AdminAIPublisherTab } from './AdminAIPublisherTab';
 import { AdminProfileModal } from './AdminProfileModal';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { ReleaseNotesModal } from './ReleaseNotesAndCertModals';
 import { resolveVersionManagerConfig, shouldShowAdminVersion } from '../utils/versionLogic';
 import {
@@ -103,7 +103,6 @@ import {
   resolveGoogleMapsEmbedUrl,
 } from '../utils/careerAndMapsLogic';
 import {
-  DEFAULT_EXTERNAL_PORTALS,
   isValidExternalPortalUrl,
   removeBotQAItem,
   reorderSuggestedQuestions,
@@ -123,10 +122,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     logout,
     pushToast,
     liveSyncStatus,
-    syncLocalToLiveServer,
-    pullFromLiveServer,
-    enableAllWebsiteSections,
-    resetToDefaultData,
+    storageMode,
     addNews,
     toggleNews,
     deleteNews,
@@ -139,9 +135,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     addEvent,
     updateEvent,
     deleteEvent,
-    updateLeadStatus,
-    updateLeadCourse,
-    deleteLead,
     addAdminUser,
     updateAdminUserRole,
     deleteAdminUser,
@@ -154,17 +147,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     updateMobileBottomBar,
   } = useCMS();
 
-  const [isLiveAccessModalOpen, setIsLiveAccessModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isReleaseNotesOpen, setIsReleaseNotesOpen] = useState(false);
 
   const versionManagerConfig = resolveVersionManagerConfig(state.versionManager);
   const showAdminVersionBadge = shouldShowAdminVersion(versionManagerConfig);
-  const activeReleaseEntry =
-    versionManagerConfig.releases.find(
-      (r) => r.version === versionManagerConfig.activeVersion && !r.isAutoBackup
-    ) || versionManagerConfig.releases[0];
-
   const tr = (bn: string, en: string, ar: string) =>
     language === 'en' ? en : language === 'ar' ? ar : bn;
   const loc = (text?: string) => (text ? localizeDynamicText(text, language) : '');
@@ -244,21 +232,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
   const [evtDate, setEvtDate] = useState('2026-11-15');
   const [evtTime, setEvtTime] = useState('10:00 AM – 01:00 PM');
   const [evtVenue, setEvtVenue] = useState('Main Campus Auditorium');
-  const [evtType, setEvtType] = useState<EventItem['type']>('On-Campus');
+  const [evtType] = useState<EventItem['type']>('On-Campus');
   const [evtDesc, setEvtDesc] = useState('');
 
-  // Leads filter & inspection state
-  const [leadStatusFilter, setLeadStatusFilter] = useState<'All' | LeadStatus>('All');
-  const [leadSourceFilter, setLeadSourceFilter] = useState<'All' | 'Registration' | 'Admission'>(
-    'All'
-  );
-  const [leadCourseFilter, setLeadCourseFilter] = useState<string>('All');
-  const [leadSearch, setLeadSearch] = useState<string>('');
+  // Lead inspection state
   const [inspectingLead, setInspectingLead] = useState<AdmissionLead | null>(null);
 
   // User Role management state
   const [newUsername, setNewUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserError, setNewUserError] = useState('');
   const [newUserFullName, setNewUserFullName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserRole, setNewUserRole] = useState<AdminRole>('Content Managers');
@@ -496,9 +479,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
   const handleAddUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEditActiveTab || !newUsername.trim() || !newUserFullName.trim()) return;
+    // Same rules the server applies, checked here so a refused account is never shown as created.
+    const username = newUsername.trim();
+    const password = newUserPassword;
+    const policy = validateNewPassword(password, username);
+    const problem = state.users.some((u) => u.username.toLowerCase() === username.toLowerCase())
+      ? tr('এই ইউজার আইডি ইতিমধ্যে ব্যবহৃত হচ্ছে।', 'This User ID is already in use.', 'اسم المستخدم هذا مستخدم بالفعل.')
+      : policy.ok
+        ? ''
+        : policy.code === 'SAME_AS_USERNAME' || policy.code === 'CONTAINS_USERNAME'
+          ? tr('পাসওয়ার্ডের ভেতরে ইউজার আইডি থাকতে পারবে না।', 'The password must not contain the User ID.', 'يجب ألا تحتوي كلمة المرور على اسم المستخدم.')
+          : policy.code === 'TOO_COMMON'
+            ? tr(
+                'এই পাসওয়ার্ডটি খুব সহজ বা বহুল ব্যবহৃত। অনুগ্রহ করে অন্য একটি পাসওয়ার্ড দিন।',
+                'This password is too common. Please choose a different one.',
+                'كلمة المرور هذه شائعة جداً. يرجى اختيار كلمة أخرى.'
+              )
+            : policy.code === 'TOO_LONG'
+              ? tr(
+                  'পাসওয়ার্ডটি খুব দীর্ঘ; অনুগ্রহ করে আরও ছোট পাসওয়ার্ড দিন।',
+                  'The password is too long; please choose a shorter one.',
+                  'كلمة المرور طويلة جداً؛ يرجى اختيار كلمة أقصر.'
+                )
+              : tr(
+                  `পাসওয়ার্ড কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষরের হতে হবে এবং তাতে বর্ণ ও সংখ্যা দুটোই থাকতে হবে।`,
+                  `The password must be at least ${MIN_PASSWORD_LENGTH} characters long and contain both letters and digits.`,
+                  `يجب ألا تقل كلمة المرور عن ${MIN_PASSWORD_LENGTH} أحرف وأن تحتوي على أحرف وأرقام.`
+                );
+    setNewUserError(problem);
+    if (problem) return;
     addAdminUser({
-      username: newUsername.trim(),
-      password: newUserPassword.trim() || '123456',
+      username,
+      password,
       fullName: newUserFullName.trim(),
       email: newUserEmail.trim() || `${newUsername.trim()}@maharatmadrasah.com`,
       role: newUserRole,
@@ -508,23 +520,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
     setNewUserFullName('');
     setNewUserEmail('');
   };
-
-  const baseLeadsList = filterLeads(
-    state.leads,
-    leadStatusFilter,
-    leadCourseFilter,
-    leadSearch
-  );
-
-  const filteredLeadsList = baseLeadsList.filter((lead) => {
-    if (leadSourceFilter === 'Registration') {
-      return lead.source === 'Registration Form' || lead.source === 'Quick Inquiry';
-    }
-    if (leadSourceFilter === 'Admission') {
-      return lead.source === 'Full Admission Form' || Boolean(lead.detailedData);
-    }
-    return true;
-  });
 
   interface NavItem {
     id: AdminTabId;
@@ -595,7 +590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
         },
         {
           id: 'calendar',
-          label: tr('প্রাতিষ্ঠানিক ক্যালেন্ডার (Google Sync)', 'Academic Calendar (Google)', 'التقويم المؤسسي'),
+          label: tr('প্রাতিষ্ঠানিক ক্যালেন্ডার', 'Academic Calendar', 'التقويم المؤسسي'),
           icon: Calendar,
         },
         {
@@ -1042,6 +1037,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {storageMode === 'demo' && (
+              <span
+                data-testid="admin-demo-mode-badge"
+                title={tr(
+                  'ডেমো মোড: কোনো ডাটাবেস সংযুক্ত নেই, তাই পরিবর্তনগুলো সার্ভার রিস্টার্ট হলে মুছে যাবে। স্থায়ীভাবে সংরক্ষণের জন্য DATABASE_URL সেট করুন।',
+                  'Demo Mode: no database is connected, so changes are lost when the server restarts. Set DATABASE_URL to persist data.',
+                  'الوضع التجريبي: لا توجد قاعدة بيانات متصلة، لذا تُفقد التغييرات عند إعادة تشغيل الخادم. اضبط DATABASE_URL لحفظ البيانات.'
+                )}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wide shrink-0 cursor-help"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">{tr('ডেমো মোড', 'Demo Mode', 'وضع تجريبي')}</span>
+              </span>
+            )}
+            {liveSyncStatus.status === 'local-only' && (
+              <span
+                role="status"
+                data-testid="admin-unsaved-badge"
+                title={tr(
+                  'সার্ভারের সাথে সংযোগ নেই। আপনার পরিবর্তনগুলো এই ব্রাউজারে আছে; সংযোগ ফিরে এলে স্বয়ংক্রিয়ভাবে সেভ হবে। ততক্ষণ ট্যাবটি বন্ধ করবেন না।',
+                  'The server cannot be reached. Your changes are kept in this browser and will be saved automatically when the connection returns. Keep this tab open until then.',
+                  'تعذر الوصول إلى الخادم. تغييراتك محفوظة في هذا المتصفح وستُحفظ تلقائياً عند عودة الاتصال. لا تغلق هذه النافذة حتى ذلك الحين.'
+                )}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-[10px] sm:text-[11px] font-extrabold shrink-0 cursor-help"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">{tr('সংরক্ষণ বাকি আছে', 'Not saved yet', 'لم يُحفظ بعد')}</span>
+              </span>
+            )}
             <AccessibilityToolbar compact={true} />
 
             {/* Staff Personal Profile & Digital Signature Vault Trigger */}
@@ -1068,6 +1092,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
 
             <button
               type="button"
+              data-testid="admin-change-password-btn"
+              onClick={() => setIsChangePasswordOpen(true)}
+              aria-label={tr('পাসওয়ার্ড পরিবর্তন করুন', 'Change Password', 'تغيير كلمة المرور')}
+              title={tr('পাসওয়ার্ড পরিবর্তন করুন', 'Change Password', 'تغيير كلمة المرور')}
+              className="inline-flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#005a6e] dark:text-[#f0c95e] transition-colors cursor-pointer shrink-0"
+            >
+              <KeyRound className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
               onClick={onSwitchToWebsite}
               className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-[#192f64] to-[#005a6e] hover:opacity-95 text-xs font-bold text-white shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
@@ -1079,222 +1114,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
             </button>
           </div>
         </header>
-
-        {/* Live Deployment Access & Global Server Sync Modal */}
-        {isLiveAccessModalOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Live Deployment Access & Server Sync Hub"
-          >
-            <div className="w-full max-w-2xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
-              <div className="px-5 py-4 bg-gradient-to-r from-purple-900 via-purple-800 to-fuchsia-900 text-white flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center">
-                    <Globe className="w-5 h-5 text-emerald-300" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm sm:text-base font-extrabold">
-                      {tr(
-                        'লাইভ ডিপ্লয়মেন্ট অ্যাক্সেস ও গ্লোবাল সার্ভার সিঙ্ক হাব',
-                        'Live Deployment Access & Global Server Sync Hub',
-                        'مركز الوصول المباشر ومزامنة الخادم العام'
-                      )}
-                    </h3>
-                    <p className="text-[11px] text-purple-200">
-                      {tr(
-                        'আপনার লোকাল/অ্যাডমিন প্যানেলের সকল তথ্য যে কেউ শেয়ার্ড লিংক থেকে লাইভ দেখতে পারবেন',
-                        'Anyone visiting the deployment link from any device sees your live data immediately',
-                        'يمكن لأي شخص يفتح الرابط المشترك رؤية جميع البيانات المحدثة مباشرة'
-                      )}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsLiveAccessModalOpen(false)}
-                  aria-label="Close Live Access Modal"
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-5 space-y-4 overflow-y-auto text-xs sm:text-sm">
-                {/* 1. Real-Time Server Sync Status & Actions */}
-                <div className="p-4 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="font-extrabold text-emerald-950 dark:text-emerald-200">
-                        {tr(
-                          `গ্লোবাল সার্ভার ডাটাবেস সিঙ্ক সক্রিয় (ভার্সন #${liveSyncStatus.version || 1})`,
-                          `Global Server Database Sync Active (Version #${liveSyncStatus.version || 1})`,
-                          `مزامنة قاعدة بيانات الخادم نشطة (الإصدار #${liveSyncStatus.version || 1})`
-                        )}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-mono text-emerald-800 dark:text-emerald-300">
-                      {liveSyncStatus.lastSyncedAt
-                        ? new Date(liveSyncStatus.lastSyncedAt).toLocaleTimeString()
-                        : 'Live'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                    {tr(
-                      'পূর্বে পরিবর্তনগুলো শুধুমাত্র ব্রাউজারের LocalStorage-এ থাকতো। এখন "/api/cms-state" সার্ভার স্টোরেজের মাধ্যমে আপনার লোকাল ব্রাউজারের সকল তথ্য স্বয়ংক্রিয়ভাবে লাইভ সার্ভারে সেভ হচ্ছে—ফলে যে কোনো ডিভাইস বা ব্রাউজার থেকে লিংকে ঢুকলে সবাই একই আপডেটেড তথ্য দেখতে পাবেন।',
-                      'Previously, edits stayed only in browser LocalStorage. Now "/api/cms-state" persists all changes on the live server automatically so any visitor on any device sees the exact same updated information.',
-                      'يتم الآن حفظ جميع التغييرات تلقائياً على الخادم المباشر ليتمكن أي زائر من أي جهاز من رؤية نفس البيانات المحدثة.'
-                    )}
-                  </p>
-                  <div className="flex flex-wrap gap-2.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => syncLocalToLiveServer(false)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>
-                        {tr(
-                          'লোকাল ডাটা এখনই লাইভ সার্ভারে পুশ করুন',
-                          'Push Local Data to Live Server Now',
-                          'رفع البيانات المحلية إلى الخادم المباشر الآن'
-                        )}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => enableAllWebsiteSections()}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold shadow-xs cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>
-                        {tr(
-                          'সব ১৭টি ওয়েবসাইট সেকশন দৃশ্যমান করুন',
-                          'Enable All 17 Website Sections',
-                          'تفعيل جميع أقسام الموقع الـ ١٧'
-                        )}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => pullFromLiveServer(false)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>
-                        {tr('সার্ভার থেকে রিফ্রেশ করুন', 'Pull Latest from Server', 'تحديث من الخادم')}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* 2. Shareable Live Deployment Links */}
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 space-y-3">
-                  <div className="font-extrabold text-slate-900 dark:text-white">
-                    {tr(
-                      'পাবলিক ও অ্যাডমিন লাইভ অ্যাক্সেস লিংক (যে কারো সাথে শেয়ার করুন)',
-                      'Shareable Public & Admin Live Access Links',
-                      'روابط الوصول المباشر للموقع ولوحة الإدارة'
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-2">
-                      <div className="text-[11px] font-bold text-purple-700 dark:text-purple-300 uppercase">
-                        {tr('১. পাবলিক লাইভ ওয়েবসাইট', '1. Public Live Website', '١. الموقع العام المباشر')}
-                      </div>
-                      <div className="font-mono text-xs text-slate-700 dark:text-slate-300 truncate bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg">
-                        {typeof window !== 'undefined' ? window.location.origin : '/'}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const url = typeof window !== 'undefined' ? window.location.origin : '';
-                          navigator.clipboard?.writeText(url);
-                          pushToast(
-                            tr('পাবলিক লিংক কপি হয়েছে!', 'Public Link Copied!', 'تم نسخ الرابط العام!'),
-                            url
-                          );
-                        }}
-                        className="w-full py-1.5 px-3 rounded-lg bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/70 text-purple-900 dark:text-purple-200 text-xs font-bold cursor-pointer"
-                      >
-                        {tr('পাবলিক ওয়েবসাইট লিংক কপি করুন', 'Copy Public Website URL', 'نسخ رابط الموقع العام')}
-                      </button>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-2">
-                      <div className="text-[11px] font-bold text-fuchsia-700 dark:text-fuchsia-300 uppercase">
-                        {tr('২. থ্রি-ডি অ্যাডমিন ও ৫-রোল পোর্টাল', '2. 3D Admin & 5-Role Portal', '٢. بوابة الإدارة ثلاثية الأبعاد')}
-                      </div>
-                      <div className="font-mono text-xs text-slate-700 dark:text-slate-300 truncate bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-lg">
-                        {typeof window !== 'undefined' ? `${window.location.origin}/admin` : '/admin'}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const url =
-                            typeof window !== 'undefined' ? `${window.location.origin}/admin` : '/admin';
-                          navigator.clipboard?.writeText(url);
-                          pushToast(
-                            tr('অ্যাডমিন পোর্টাল লিংক কপি হয়েছে!', 'Admin Portal Link Copied!', 'تم نسخ رابط الإدارة!'),
-                            url
-                          );
-                        }}
-                        className="w-full py-1.5 px-3 rounded-lg bg-fuchsia-100 hover:bg-fuchsia-200 dark:bg-fuchsia-950/70 text-fuchsia-900 dark:text-fuchsia-200 text-xs font-bold cursor-pointer"
-                      >
-                        {tr('অ্যাডমিন পোর্টাল লিংক (/admin) কপি করুন', 'Copy Admin Portal URL (/admin)', 'نسخ رابط بوابة الإدارة')}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. 5-Role Quick Access Credentials Table for Testing/Sharing */}
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 space-y-2.5">
-                  <div className="font-extrabold text-slate-900 dark:text-white">
-                    {tr(
-                      '৫টি রোলের লগইন ক্রেডেনশিয়াল (যাতে যে কেউ টেস্ট ও অ্যাক্সেস করতে পারেন)',
-                      '5-Role Login Credentials for Live Inspection',
-                      'بيانات الدخول للأدوار الخمسة للمعاينة المباشرة'
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {state.users.slice(0, 5).map((u) => (
-                      <div
-                        key={u.id}
-                        className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-xs font-extrabold text-purple-900 dark:text-purple-300 truncate">
-                            {u.role}
-                          </div>
-                          <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                            ID: <strong className="text-slate-900 dark:text-white">{u.username}</strong> · Pass:{' '}
-                            <strong className="text-slate-900 dark:text-white">{u.password}</strong>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const text = `Role: ${u.role} | User ID: ${u.username} | Password: ${u.password}`;
-                            navigator.clipboard?.writeText(text);
-                            pushToast(
-                              tr('ক্রেডেনশিয়াল কপি হয়েছে', 'Credentials Copied', 'تم نسخ بيانات الدخول'),
-                              text
-                            );
-                          }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-purple-100 dark:bg-slate-800 dark:hover:bg-purple-900/50 text-[11px] font-bold text-purple-800 dark:text-purple-200 shrink-0 cursor-pointer"
-                        >
-                          {tr('কপি', 'Copy', 'نسخ')}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Main Viewport */}
         <main className="p-3 sm:p-6 flex-1 w-full max-w-full overflow-x-hidden overflow-y-auto [&_input]:dark:bg-slate-800 [&_input]:dark:border-slate-700 [&_input]:dark:text-slate-100 [&_select]:dark:bg-slate-800 [&_select]:dark:border-slate-700 [&_select]:dark:text-slate-100 [&_textarea]:dark:bg-slate-800 [&_textarea]:dark:border-slate-700 [&_textarea]:dark:text-slate-100 [&_label]:dark:text-slate-300">
@@ -4011,11 +3830,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
                               disabled={userRole !== 'Super Admin'}
                               value={newUserPassword}
                               onChange={(e) => setNewUserPassword(e.target.value)}
-                              placeholder="pass123"
+                              placeholder="Noor-2027-Uttara"
+                              required
+                              aria-describedby="new-user-password-hint"
                               className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-mono"
                             />
                           </div>
                         </div>
+                        <p id="new-user-password-hint" className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {tr(
+                            `কমপক্ষে ${toBengaliDigits(MIN_PASSWORD_LENGTH)} অক্ষর; বর্ণ ও সংখ্যা দুটোই থাকতে হবে। প্রথমবার লগইনের পর ব্যবহারকারীকে নিজের পাসওয়ার্ড বদলাতে হবে।`,
+                            `At least ${MIN_PASSWORD_LENGTH} characters with letters and digits. The user must choose their own password at first sign-in.`,
+                            `${MIN_PASSWORD_LENGTH} أحرف على الأقل تتضمن أحرفاً وأرقاماً. يجب على المستخدم تغييرها عند أول تسجيل دخول.`
+                          )}
+                        </p>
+                        {newUserError && (
+                          <p role="alert" data-testid="new-user-error" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-300">
+                            {newUserError}
+                          </p>
+                        )}
                         <div>
                           <label className="block font-semibold text-slate-700 mb-1">
                             {tr('ইমেইল', 'Email', 'البريد الإلكتروني')}
@@ -5259,6 +5092,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onSwitchToWebsit
       <AdminProfileModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+      />
+
+      <ChangePasswordDialog
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+        onChanged={() => setIsChangePasswordOpen(false)}
       />
 
       {/* Full Changelog & Release Notes Modal */}
