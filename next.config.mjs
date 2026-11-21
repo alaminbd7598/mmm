@@ -40,11 +40,15 @@ const nextConfig = {
   reactStrictMode: false,
   poweredByHeader: false,
   images: { unoptimized: true },
-  // The type check needs about 2 GB of RAM. Hosts with less can set SKIP_BUILD_TYPECHECK=1
-  // (run `npm run lint` before pushing instead).
-  typescript: { ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === '1' },
-  // Bodies of routes matched by src/proxy.ts (/api/admin/*) are buffered; allow the sync limit.
-  experimental: { proxyClientMaxBodySize: '12mb' },
+  // Memory: `npm run build` runs `tsc` on its own before `next build`, so the bundler and the
+  // type checker never hold memory at the same time, and build workers are limited to one.
+  // Together the build fits in about 1.3 GB of RAM (see docs/ARCHITECTURE.md, "Build").
+  typescript: { ignoreBuildErrors: true },
+  experimental: {
+    cpus: 1,
+    // Bodies of routes matched by src/proxy.ts (/api/admin/*) are buffered; allow the sync limit.
+    proxyClientMaxBodySize: '12mb',
+  },
   async headers() {
     return [
       { source: '/:path*', headers: SECURITY_HEADERS },
