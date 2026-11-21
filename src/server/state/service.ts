@@ -4,7 +4,7 @@ import { hashPassword } from '../auth/password';
 import { findProfile, toSafeUser } from '../auth/safe-user';
 import { getStaffSession } from '../auth/session';
 import type { CMSState } from '../../types/cms';
-import { CONFLICT_REASON_PREFIX, type StaffSession, type StateResponse, type SyncResponse } from '../contracts';
+import type { StaffSession, StateResponse, SyncResponse } from '../contracts';
 import { getStore } from '../db/store';
 import { HttpError } from '../http';
 import { demoAdminEnabled, loginSetupIssue } from '../auth/jwt';
@@ -12,7 +12,7 @@ import { demoAccounts } from '../db/seed';
 import { authoriseOps } from './authorize';
 import { contentRejection } from './document-rules';
 import { projectPublicState, projectStaffState } from './project';
-import { enforceSignatorySlots } from './signatories';
+import { applySyncOps } from './sync-apply';
 import { extractSyncPasswords } from './sync-passwords';
 import { parseSyncRequest } from './validate';
 
@@ -129,25 +129,15 @@ export async function runStaffSync(session: StaffSession, rawBody: unknown): Pro
     mustChangePassword[userId] = true;
   }
 
-  // Server-made follow-up writes (one holder per signatory slot) come after the client's ops, so
-  // conflict indexes below still point into `passwords.ops`.
-  const result = await store.applyOps(
-    enforceSignatorySlots(
-      passwords.ops.map((o) => o.op),
-      snapshot.state
-    ),
-    { passwordHashes, mustChangePassword, baseVersion: parsed.value.baseVersion }
-  );
-  for (const at of result.conflicts ?? []) {
-    if (!passwords.ops[at]) continue;
-    rejected.push({
-      index: passwords.ops[at].index,
-      reason: `${CONFLICT_REASON_PREFIX} "${passwords.ops[at].op.key}" was changed by someone else after you loaded it.`,
-    });
-  }
+  const applied = await applySyncOps(store, passwords.ops, snapshot, {
+    passwordHashes,
+    mustChangePassword,
+    baseVersion: parsed.value.baseVersion,
+  });
+  rejected.push(...applied.conflicts);
   rejected.sort((a, b) => a.index - b.index);
   return {
     status: 200,
-    body: { ok: true, version: result.version, updatedAt: result.updatedAt, ...(rejected.length ? { rejected } : {}) },
+    body: { ok: true, version: applied.version, updatedAt: applied.updatedAt, ...(rejected.length ? { rejected } : {}) },
   };
 }

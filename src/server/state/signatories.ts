@@ -13,7 +13,7 @@ export type SignatorySlot = (typeof SIGNATORY_SLOTS)[number];
 export const isSignatorySlot = (slot: unknown): slot is SignatorySlot =>
   (SIGNATORY_SLOTS as readonly unknown[]).includes(slot);
 
-/** `base` that never conflicts: the server-made follow-up writes must always apply. */
+/** `base` that never conflicts, for callers that apply the follow-up writes unconditionally. */
 const ALWAYS_CURRENT = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -21,8 +21,16 @@ const ALWAYS_CURRENT = Number.MAX_SAFE_INTEGER;
  * - when a user is written with a slot, every other user holding it is written back with
  *   `signatorySlot: 'none'` (appended upserts), so the newest assignment wins;
  * - in a replaced user list the first holder of each slot keeps it.
+ *
+ * `followUpBase` is the version of `state`: the appended writes carry it as their `base`, so a
+ * holder changed after that snapshot is detected as a conflict instead of being overwritten with
+ * its older copy. The staff sync applies such a batch all or nothing (see sync-apply.ts).
  */
-export function enforceSignatorySlots(ops: readonly SyncOp[], state: CMSState): SyncOp[] {
+export function enforceSignatorySlots(
+  ops: readonly SyncOp[],
+  state: CMSState,
+  followUpBase: number = ALWAYS_CURRENT
+): SyncOp[] {
   if (!ops.some((op) => op.key === 'users' && (op.op === 'upsert' || op.op === 'replace'))) return [...ops];
   const users = new Map<string, Item>((state.users || []).map((u) => [u.id, u as unknown as Item]));
   const cleared = new Set<string>();
@@ -67,7 +75,7 @@ export function enforceSignatorySlots(ops: readonly SyncOp[], state: CMSState): 
 
   for (const id of cleared) {
     const user = users.get(id);
-    if (user) out.push({ op: 'upsert', key: 'users', item: user, base: ALWAYS_CURRENT });
+    if (user) out.push({ op: 'upsert', key: 'users', item: user, base: followUpBase });
   }
   return out;
 }

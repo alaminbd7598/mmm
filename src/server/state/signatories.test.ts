@@ -65,3 +65,8 @@ test('a replaced user list keeps the first holder of each slot', () => {
   const items = (out[0] as Extract<SyncOp, { op: 'replace' }>).items;
   assert.deepEqual(items.map((i) => i.signatorySlot), ['principal', 'none', 'chairman']);
 });
+
+test('follow-up writes carry the version of the state they were derived from', () => {
+  const out = enforceSignatorySlots([{ op: 'upsert', key: 'users', item: user('a', 'chairman') }], state, 41);
+  assert.equal((out[1] as Extract<SyncOp, { op: 'upsert' }>).base, 41);
+});
