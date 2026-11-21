@@ -174,7 +174,9 @@ export function useServerSync({ state, setState, onSession, notify, tr }: Server
       lastSyncedAt: updatedAt || new Date().toISOString(),
     });
   const markLocalOnly = () => setLiveSyncStatus((prev) => ({ ...prev, status: 'local-only' }));
-  const markSyncing = () => setLiveSyncStatus((prev) => ({ ...prev, status: 'syncing' }));
+  /** A retry while unsaved changes are waiting keeps saying so until the server has confirmed them. */
+  const markSyncing = () =>
+    setLiveSyncStatus((prev) => (prev.status === 'local-only' ? prev : { ...prev, status: 'syncing' }));
 
   const setMode = (mode: ClientStorageMode) => {
     modeRef.current = mode;

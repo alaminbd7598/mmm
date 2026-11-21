@@ -24,12 +24,15 @@
  * otherwise) and, in database mode, an ADMIN_BOOTSTRAP_PASSWORD (yours, or a random one). The
  * Super Admin must still have that bootstrap password, so every database-mode run needs a new
  * empty database. With --base-url, start the server with the same variables yourself.
+ * In database mode the spawned server reaches the database through a small TCP relay inside this
+ * script, so the outage scenario can cut and restore the connection (skipped with --base-url).
  * The login rate-limit scenario runs last because it exhausts the per-IP login budget of the
  * server process for 15 minutes. Exit code 0 = all scenarios passed.
  */
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const net = require('node:net');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { chromium, request: pwRequest } = require('playwright');
@@ -99,13 +102,59 @@ async function waitForServer(url, timeoutMs) {
   throw new Error(`Server at ${url} did not become ready.`);
 }
 
-function startServer() {
+/**
+ * TCP relay between the spawned server and the database. `cut()` drops every connection and stops
+ * listening (the database looks down); `restore()` listens again.
+ */
+async function startDbRelay() {
+  const target = new URL(process.env.DATABASE_URL);
+  const sockets = new Set();
+  const relayPort = PORT + 1000;
+  let server = null;
+  const listen = () =>
+    new Promise((resolve, reject) => {
+      server = net.createServer((client) => {
+        const upstream = net.connect(Number(target.port || 3306), target.hostname);
+        for (const sock of [client, upstream]) {
+          sockets.add(sock);
+          sock.on('error', () => {});
+          sock.on('close', () => sockets.delete(sock));
+        }
+        client.pipe(upstream);
+        upstream.pipe(client);
+        client.on('close', () => upstream.destroy());
+        upstream.on('close', () => client.destroy());
+      });
+      server.once('error', reject);
+      server.listen(relayPort, '127.0.0.1', resolve);
+    });
+  await listen();
+  const relayed = new URL(target);
+  relayed.hostname = '127.0.0.1';
+  relayed.port = String(relayPort);
+  return {
+    url: relayed.toString(),
+    cut() {
+      for (const sock of sockets) sock.destroy();
+      return new Promise((resolve) => server.close(resolve));
+    },
+    restore: listen,
+    async stop() {
+      for (const sock of sockets) sock.destroy();
+      if (server.listening) await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+function startServer(databaseUrl) {
   const child = spawn('npx', ['next', 'start', '-p', String(PORT)], {
     cwd: ROOT,
     env: {
       ...process.env,
       NODE_ENV: 'production',
-      ...(DB_MODE ? { ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP_PASSWORD } : { DEMO_MODE: '1' }),
+      ...(DB_MODE
+        ? { ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP_PASSWORD, DATABASE_URL: databaseUrl }
+        : { DEMO_MODE: '1' }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -151,8 +200,21 @@ function watchPage(page, sink) {
   });
 }
 
-async function newVisitorContext(browser) {
-  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, reducedMotion: 'reduce' });
+let clientCounter = 0;
+/** A browser context that looks like its own visitor: separate storage and client address. */
+async function newVisitorContext(browser, { mobile = false } = {}) {
+  clientCounter += 1;
+  const ctx = await browser.newContext({
+    viewport: mobile ? { width: 390, height: 844 } : { width: 1366, height: 900 },
+    ...(mobile ? { isMobile: true, hasTouch: true } : {}),
+    reducedMotion: 'reduce',
+  });
+  // The server reads the address its proxy appended (TRUSTED_PROXY_HOPS=1): one per context,
+  // added to requests for the site only (third-party hosts would refuse the extra header).
+  const address = `10.77.${Math.floor(clientCounter / 250)}.${(clientCounter % 250) + 1}`;
+  await ctx.route(`${BASE}/api/**`, (route) =>
+    route.continue({ headers: { ...route.request().headers(), 'x-forwarded-for': address } })
+  );
   await ctx.addInitScript(() => {
     try {
       sessionStorage.setItem('maharat_promo_seen', '1');
@@ -162,6 +224,39 @@ async function newVisitorContext(browser) {
   });
   return ctx;
 }
+
+const randomPhone = () => `017${String(Math.floor(10_000_000 + Math.random() * 89_999_999))}`;
+
+async function fillHomeRegistration(page, { student, guardian, phone }) {
+  await page.locator('#home-reg-student').scrollIntoViewIfNeeded();
+  await page.fill('#home-reg-student', student);
+  await page.fill('#home-reg-guardian', guardian);
+  await page.fill('#home-reg-mobile', phone);
+  const classSelect = page.locator('#home-reg-class');
+  await classSelect.selectOption(await classSelect.locator('option').nth(1).getAttribute('value'));
+}
+
+async function uiLogin(page, username, password) {
+  await page.goto(BASE + '/admin', { waitUntil: 'networkidle' });
+  await page.fill('#login-userid', username);
+  await page.fill('#login-password', password);
+  await page.getByTestId('login-submit-button').click();
+  await page.getByTestId('admin-dashboard-version').waitFor({ timeout: 20_000 });
+}
+
+/** Text of the first visible error message (role="alert") inside `scope`, or ''. */
+async function alertText(scope) {
+  const alert = scope.locator('[role="alert"]:visible');
+  return (await alert.count()) ? (await alert.first().innerText()).trim() : '';
+}
+
+const SUBMIT_GLOB = '**/api/public/submit';
+const rejectWith429 = (route) =>
+  route.fulfill({
+    status: 429,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: false, error: 'Too many requests. Please try again shortly.', code: 'RATE_LIMITED' }),
+  });
 
 async function dismissOverlays(page) {
   for (let i = 0; i < 2; i++) {
@@ -200,9 +295,11 @@ async function openAdminTab(page, labelRegex) {
 
 async function main() {
   let server = null;
+  let dbRelay = null;
   if (!args['base-url']) {
     if (args['db-push']) pushSchema();
-    server = startServer();
+    if (DB_MODE) dbRelay = await startDbRelay();
+    server = startServer(dbRelay ? dbRelay.url : undefined);
   }
   const meta = await waitForServer(BASE, 60_000);
   console.log(`Server ${BASE} ready: mode=${meta.mode} version=${meta.version} (expected ${DB_MODE ? 'database' : 'demo'})`);
@@ -212,7 +309,7 @@ async function main() {
   const lead = {
     student: `E2E Student ${RUN_ID}`,
     guardian: `E2E Guardian ${RUN_ID}`,
-    phone: `017${String(Math.floor(10_000_000 + Math.random() * 89_999_999))}`,
+    phone: randomPhone(),
   };
   const noticeTitle = `E2E Notice ${RUN_ID}`;
   const teacher = { username: `e2eteacher${RUN_ID}`, password: strongPassword('Teach3r-'), newPassword: strongPassword('Teach3r-n') };
@@ -271,13 +368,7 @@ async function main() {
     await scenario('visitor submits the home admission inquiry form through the UI', async () => {
       await visitor.goto(BASE + '/', { waitUntil: 'networkidle' });
       await dismissOverlays(visitor);
-      await visitor.locator('#home-reg-student').scrollIntoViewIfNeeded();
-      await visitor.fill('#home-reg-student', lead.student);
-      await visitor.fill('#home-reg-guardian', lead.guardian);
-      await visitor.fill('#home-reg-mobile', lead.phone);
-      const classSelect = visitor.locator('#home-reg-class');
-      const firstClass = await classSelect.locator('option').nth(1).getAttribute('value');
-      await classSelect.selectOption(firstClass);
+      await fillHomeRegistration(visitor, lead);
       const submitted = waitForApi(visitor, '/api/public/submit');
       await visitor.locator('#quick-registration button[type="submit"]').click();
       const res = await submitted;
@@ -405,6 +496,435 @@ async function main() {
       assert(detail.status() === 200, `teacher (view permission) GET /api/admin/virtual-office ${detail.status()}`);
       await api.post('/api/auth/logout');
       await api.dispose();
+    });
+
+    // ------------------------------------------------------------------------------------
+    // Public forms: success only after the server accepted; errors keep the visitor's input
+    // ------------------------------------------------------------------------------------
+
+    await scenario('admin switches the Virtual Office desk to live (so check-ins unlock the room at any hour)', async () => {
+      const state = await (await admin.request.get(BASE + '/api/state')).json();
+      const res = await admin.request.post(BASE + '/api/admin/sync', {
+        data: {
+          baseVersion: state.version,
+          ops: [{ op: 'set', key: 'virtualOfficeConfig', value: { ...state.state.virtualOfficeConfig, enabled: true, manualStatus: 'ONLINE_LIVE' } }],
+        },
+      });
+      const body = await res.json();
+      assert(res.status() === 200 && body.ok && !body.rejected, `sync returned ${res.status()} ${JSON.stringify(body).slice(0, 300)}`);
+    });
+
+    for (const mobile of [false, true]) {
+      const device = mobile ? 'mobile' : 'desktop';
+
+      await scenario(`Virtual Office check-in through the UI shows the join panel (${device})`, async () => {
+        const ctx = await newVisitorContext(browser, { mobile });
+        const page = await ctx.newPage();
+        const errors = [];
+        watchPage(page, errors);
+        await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+        await dismissOverlays(page);
+        await page.getByTestId('virtual-office-launcher').click();
+        const form = page.locator('form', { has: page.locator('input[placeholder="017XX-XXXXXX"]') });
+        const name = `E2E VO ${device} ${RUN_ID}`;
+        const phone = randomPhone();
+        await form.locator('input[type="text"]').first().fill(name);
+        await form.locator('input[type="tel"]').fill(phone);
+        await form.locator('input[type="email"]').fill('vo-e2e@example.com');
+
+        // A refused check-in reports the reason in the form and keeps what was typed.
+        await page.route('**/api/public/virtual-office/checkin', rejectWith429);
+        await form.locator('button[type="submit"]').click();
+        await form.locator('[role="alert"]').waitFor({ timeout: 10_000 });
+        assert(!/RATE_LIMITED|Too many/.test(await alertText(form)), `raw server text shown: ${await alertText(form)}`);
+        assert((await form.locator('input[type="tel"]').inputValue()) === phone, 'phone was cleared after a refusal');
+        await page.unroute('**/api/public/virtual-office/checkin');
+
+        const checkedIn = waitForApi(page, '/api/public/virtual-office/checkin');
+        await form.locator('button[type="submit"]').click();
+        const res = await checkedIn;
+        const body = await res.json();
+        assert(res.status() === 200 && body.ok, `check-in returned ${res.status()} ${JSON.stringify(body).slice(0, 200)}`);
+        assert(body.unlocked && body.join && body.join.dutyOfficerPhone, `join details missing: ${JSON.stringify(body.join)}`);
+        // The join panel: the duty officer's call link and, when a room is configured, the room link.
+        await page.locator('a[href^="tel:"]').first().waitFor({ timeout: 10_000 });
+        const text = await page.locator('body').innerText();
+        assert(!/পেইজটি লোড করতে সাময়িক সমস্যা/.test(text), 'the error boundary replaced the site');
+        assert((await page.locator('header').count()) > 0, 'site header is gone after the check-in');
+        const state = await (await admin.request.get(BASE + '/api/state')).json();
+        assert((state.state.virtualOfficeSessions || []).some((v) => v.fullName === name), 'session not stored');
+        assert((state.state.leads || []).some((l) => l.name === name && l.phone === phone), 'lead not stored');
+        await ctx.close();
+        const unexpected = errors.filter((e) => !/status of 429/.test(e)); // the refusal injected above
+        assert(unexpected.length === 0, `errors:\n${unexpected.join('\n')}`);
+      });
+
+      await scenario(`home registration: refusal and network failure keep the form; the shown reference is the stored id; a sibling gets a lead of its own (${device})`, async () => {
+        const ctx = await newVisitorContext(browser, { mobile });
+        const page = await ctx.newPage();
+        const pageErrors = [];
+        page.on('pageerror', (e) => pageErrors.push(e.message));
+        await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+        await dismissOverlays(page);
+        const first = { student: `E2E First ${device} ${RUN_ID}`, guardian: 'E2E Guardian', phone: randomPhone() };
+        await fillHomeRegistration(page, first);
+        const section = page.locator('#quick-registration');
+        const submit = page.getByTestId('home-reg-submit');
+
+        for (const [label, handler] of [['429', rejectWith429], ['offline', (route) => route.abort()]]) {
+          await page.route(SUBMIT_GLOB, handler);
+          await submit.click();
+          await section.locator('[role="alert"]').waitFor({ timeout: 10_000 });
+          const message = await alertText(section);
+          assert(message && !/RATE_LIMITED|Too many|HTTP_/.test(message), `${label}: unexpected error text "${message}"`);
+          assert((await page.getByTestId('home-reg-success').count()) === 0, `${label}: success card shown`);
+          assert(!/নিবন্ধিত|Logged/.test(await page.locator('body').innerText()), `${label}: success toast shown`);
+          assert((await page.inputValue('#home-reg-student')) === first.student, `${label}: student name was cleared`);
+          assert((await page.inputValue('#home-reg-mobile')) === first.phone, `${label}: phone was cleared`);
+          await page.unroute(SUBMIT_GLOB);
+        }
+
+        let accepted = waitForApi(page, '/api/public/submit');
+        await submit.click();
+        const firstIds = (await (await accepted).json()).ids;
+        await page.getByTestId('home-reg-success').waitFor({ timeout: 10_000 });
+        const shown = ((await page.getByTestId('home-reg-success').innerText()).match(/REF: (\S+)/) || [])[1];
+        assert(shown === firstIds[0], `reference shown "${shown}" is not the stored lead id "${firstIds[0]}"`);
+
+        // Second child, same guardian phone, same browser: must reach the server as its own lead.
+        await page.getByTestId('home-reg-success').locator('button').first().click();
+        const sibling = { ...first, student: `E2E Sibling ${device} ${RUN_ID}` };
+        await fillHomeRegistration(page, sibling);
+        accepted = waitForApi(page, '/api/public/submit');
+        await submit.click();
+        const secondRes = await accepted;
+        const sent = JSON.parse(secondRes.request().postData());
+        assert(sent.items.some((i) => i.key === 'leads'), 'the second submission carried no lead');
+        await page.getByTestId('home-reg-success').waitFor({ timeout: 10_000 });
+        // Closing the tab right after the confirmation loses nothing: it is already stored.
+        await ctx.close();
+        const state = await (await admin.request.get(BASE + '/api/state')).json();
+        const leads = (state.state.leads || []).filter((l) => l.phone === first.phone);
+        assert(leads.length === 2, `expected 2 leads for the guardian phone, found ${leads.length}`);
+        assert(leads.some((l) => l.id === shown && l.name.includes(first.student)), 'first child lead missing');
+        assert(leads.some((l) => l.name.includes(sibling.student)), 'sibling lead missing');
+        assert(pageErrors.length === 0, `page errors:\n${pageErrors.join('\n')}`);
+        // The long-lived test pages polled during the outage; their 503s are expected.
+        for (const sink of [visitorErrors, adminErrors]) {
+          const kept = sink.filter((e) => !/503/.test(e));
+          sink.length = 0;
+          sink.push(...kept);
+        }
+      });
+    }
+
+    await scenario('contact inquiry, registration and complaint forms: error first, success only once stored', async () => {
+      const ctx = await newVisitorContext(browser);
+      const page = await ctx.newPage();
+      const tag = `E2E ${RUN_ID}`;
+
+      // Contact inquiry
+      await page.goto(BASE + '/contact', { waitUntil: 'networkidle' });
+      await dismissOverlays(page);
+      await page.fill('#inq-name', `Inquiry ${tag}`);
+      await page.fill('#inq-phone', randomPhone());
+      await page.fill('#inq-email', 'inquiry-e2e@example.com');
+      await page.fill('#inq-message', 'Please call back.');
+      const inquirySubmit = page.locator('form', { has: page.locator('#inq-name') }).locator('button[type="submit"]');
+      await page.route(SUBMIT_GLOB, (route) => route.abort());
+      await inquirySubmit.click();
+      await page.locator('[role="alert"]', { hasText: /সংযোগ/ }).first().waitFor({ timeout: 10_000 });
+      assert((await page.inputValue('#inq-name')) === `Inquiry ${tag}`, 'inquiry name was cleared after a failure');
+      assert(!(await page.locator('body').innerText()).includes(`ধন্যবাদ Inquiry ${tag}`), 'inquiry success shown after a failure');
+      await page.unroute(SUBMIT_GLOB);
+      let accepted = waitForApi(page, '/api/public/submit');
+      await inquirySubmit.click();
+      assert((await accepted).status() === 200, 'inquiry was not accepted');
+      await page.getByText(`ধন্যবাদ Inquiry ${tag}`).first().waitFor({ timeout: 10_000 });
+
+      // Registration form on /admission: the reference shown is the stored lead id.
+      await page.goto(BASE + '/admission', { waitUntil: 'networkidle' });
+      await dismissOverlays(page);
+      const reg = page.locator('#registration-section');
+      const regForm = reg.locator('form');
+      await regForm.locator('input[type="text"]').first().fill(`Registration ${tag}`);
+      await regForm.locator('input[type="text"]').nth(1).fill('E2E Guardian');
+      await regForm.locator('input[placeholder="01XXXXXXXXX"]').fill(randomPhone());
+      await regForm.locator('input[placeholder="parent@example.com"]').fill('registration-e2e@example.com');
+      await page.route(SUBMIT_GLOB, rejectWith429);
+      await regForm.locator('button[type="submit"]').click();
+      await regForm.locator('[role="alert"]').waitFor({ timeout: 10_000 });
+      assert(!/Registration Reference ID/.test(await reg.innerText()), 'registration receipt shown after a refusal');
+      await page.unroute(SUBMIT_GLOB);
+      accepted = waitForApi(page, '/api/public/submit');
+      await regForm.locator('button[type="submit"]').click();
+      const regIds = (await (await accepted).json()).ids;
+      await reg.getByText('Registration Reference ID').waitFor({ timeout: 10_000 });
+      const regShown = ((await reg.innerText()).match(/Registration Reference ID:\s*(\S+)/) || [])[1];
+      assert(regShown === regIds[0], `registration reference "${regShown}" is not the stored id "${regIds[0]}"`);
+
+      // Complaint / suggestion
+      await page.goto(BASE + '/feedback', { waitUntil: 'networkidle' });
+      await dismissOverlays(page);
+      const feedback = page.locator('#guardian-feedback');
+      const complaintForm = feedback.locator('form');
+      await complaintForm.locator('input[type="text"]').first().fill(`Complaint ${tag}`);
+      await complaintForm.locator('input[type="tel"]').first().fill(randomPhone());
+      await complaintForm.locator('textarea').fill(`Suggestion ${tag}`);
+      await page.route(SUBMIT_GLOB, rejectWith429);
+      await complaintForm.locator('button[type="submit"]').click();
+      await feedback.locator('[role="alert"]').waitFor({ timeout: 10_000 });
+      assert((await complaintForm.locator('textarea').inputValue()) === `Suggestion ${tag}`, 'complaint text was cleared after a refusal');
+      await page.unroute(SUBMIT_GLOB);
+      accepted = waitForApi(page, '/api/public/submit');
+      await complaintForm.locator('button[type="submit"]').click();
+      assert((await accepted).status() === 200, 'complaint was not accepted');
+      await ctx.close();
+
+      const state = (await (await admin.request.get(BASE + '/api/state')).json()).state;
+      assert(state.leads.some((l) => l.name === `Inquiry ${tag}`), 'inquiry lead not stored');
+      assert(state.leads.some((l) => l.id === regShown && l.name === `Registration ${tag}`), 'registration lead not stored');
+      assert((state.complaints || []).some((c) => c.guardianName === `Complaint ${tag}`), 'complaint not stored');
+    });
+
+    await scenario('full admission form through the UI: the receipt number is the stored lead id', async () => {
+      const ctx = await newVisitorContext(browser);
+      const page = await ctx.newPage();
+      await page.goto(BASE + '/admission', { waitUntil: 'networkidle' });
+      await dismissOverlays(page);
+      await page.getByRole('button', { name: /৬-ধাপের ভর্তি ফরম ওপেন করুন|Open 6-Step Admission Form/ }).first().click();
+      await page.getByRole('button', { name: /ডেমো তথ্য অটো-ফিল করুন|Auto-Fill Sample Applicant/ }).first().click();
+      const studentEn = `Admission ${RUN_ID}`;
+      await page.locator('input[value="Farhan Sadik"]').first().fill(studentEn);
+      for (let step = 1; step <= 6; step++) {
+        await page.getByRole('button', { name: step < 6 ? /পরবর্তী|Next Step/ : /প্রিভিউ|Preview Application/ }).last().click();
+        await page.waitForTimeout(250);
+      }
+      // Refused: back on the form with the reason, nothing lost; then accepted.
+      await page.route(SUBMIT_GLOB, rejectWith429);
+      await page.getByRole('button', { name: /Confirm . Submit/ }).click();
+      await page.locator('[role="alert"]').first().waitFor({ timeout: 10_000 });
+      assert(!/আবেদন রিসিট নং/.test(await page.locator('body').innerText()), 'receipt shown after a refusal');
+      await page.unroute(SUBMIT_GLOB);
+      await page.getByRole('button', { name: /প্রিভিউ|Preview Application/ }).last().click();
+      const accepted = waitForApi(page, '/api/public/submit');
+      await page.getByRole('button', { name: /Confirm . Submit/ }).click();
+      const ids = (await (await accepted).json()).ids;
+      await page.getByText(/আবেদন রিসিট নং/).first().waitFor({ timeout: 10_000 });
+      const shown = ((await page.locator('body').innerText()).match(/আবেদন রিসিট নং:\s*(\S+)/) || [])[1];
+      assert(shown === ids[0], `receipt number "${shown}" is not the stored lead id "${ids[0]}"`);
+      await ctx.close();
+      const state = (await (await admin.request.get(BASE + '/api/state')).json()).state;
+      const stored = state.leads.find((l) => l.id === shown);
+      assert(stored && stored.detailedData && stored.detailedData.studentNameEn === studentEn, 'admission form data not stored');
+    });
+
+    await scenario('two full admission forms with the same guardian phone are both kept in full', async () => {
+      const api = await apiClient();
+      const phone = randomPhone();
+      const form = (name) => ({
+        key: 'leads',
+        item: {
+          id: 'client-id',
+          name,
+          phone,
+          email: 'siblings-e2e@example.com',
+          courseId: 'course-prep-2',
+          message: 'Full admission form',
+          source: 'Full Admission Form',
+          detailedData: { studentNameEn: name, studentNameBn: name, fatherMobile: phone, fatherNameEn: 'Shared Father', targetClass: 'Class One' },
+        },
+      });
+      const ids = [];
+      for (const name of [`Sibling One ${RUN_ID}`, `Sibling Two ${RUN_ID}`]) {
+        const res = await api.post('/api/public/submit', { data: { items: [form(name)] } });
+        assert(res.status() === 200, `submit returned ${res.status()} ${await res.text()}`);
+        ids.push((await res.json()).ids[0]);
+      }
+      await api.dispose();
+      assert(ids[0] !== ids[1], 'the second child was merged into the first lead');
+      const state = (await (await admin.request.get(BASE + '/api/state')).json()).state;
+      const [one, two] = ids.map((id) => state.leads.find((l) => l.id === id));
+      assert(one && one.detailedData.studentNameEn === `Sibling One ${RUN_ID}`, 'first form data missing');
+      assert(two && two.detailedData.studentNameEn === `Sibling Two ${RUN_ID}`, 'second form data missing');
+      assert((two.notes || []).some((n) => n.text.includes(one.id)), 'the second lead is not linked to the first');
+    });
+
+    // ------------------------------------------------------------------------------------
+    // Admin data integrity
+    // ------------------------------------------------------------------------------------
+
+    await scenario('creating a staff user with a weak or common password shows the reason and creates nothing', async () => {
+      await openAdminTab(admin, /ইউজার রোল ও RBAC|User Roles & RBAC/);
+      const form = admin.locator('form', { has: admin.locator('input[placeholder="mahmud"]') });
+      for (const [username, password] of [[`weak${RUN_ID}`, 'pass123'], [`common${RUN_ID}`, 'password1234']]) {
+        await admin.fill('input[placeholder="e.g. Ustadh Mahmudul Hasan"]', `Weak ${username}`);
+        await admin.fill('input[placeholder="mahmud"]', username);
+        await admin.fill('input[placeholder="Noor-2027-Uttara"]', password);
+        await form.locator('button[type="submit"]').click();
+        await admin.getByTestId('new-user-error').waitFor({ timeout: 5_000 });
+        await admin.waitForTimeout(800);
+        assert(!/নতুন স্টাফ অ্যাকাউন্ট তৈরি হয়েছে|Staff Account Created/.test(await admin.locator('body').innerText()), `${password}: success toast shown`);
+        const state = await (await admin.request.get(BASE + '/api/state')).json();
+        assert(!(state.state.users || []).some((u) => u.username === username), `${password}: account was created`);
+      }
+      await admin.fill('input[placeholder="mahmud"]', '');
+      await admin.fill('input[placeholder="Noor-2027-Uttara"]', '');
+    });
+
+    await scenario('deleted items stay deleted and an emptied list stays empty after reload (admin and visitors)', async () => {
+      const before = (await (await admin.request.get(BASE + '/api/state')).json()).state;
+      const graduate = before.hifzTreeConfig.graduates[0];
+      const newGraduate = `হাফেজ ই-টু-ই ${RUN_ID}`;
+
+      await openAdminTab(admin, /স্ক্রলিং নিউজ ম্যানেজার|Scrolling News Manager/);
+      for (let i = 0; i < 60 && (await admin.locator('button[aria-label^="Delete "]').count()) > 0; i++) {
+        await admin.locator('button[aria-label^="Delete "]').first().click();
+        await admin.waitForTimeout(200);
+      }
+      await openAdminTab(admin, /Media Showcase/);
+      await admin.getByRole('button', { name: /হিফজুল কুরআন ট্রি ও সার্টিফিকেট/ }).first().click();
+      let synced = waitForApi(admin, '/api/admin/sync');
+      await admin.locator(`button[aria-label="Delete ${graduate.nameBn}"]`).first().click();
+      await synced;
+      await admin.locator('input[placeholder^="হাফেজের পূর্ণ নাম"]').fill(newGraduate);
+      synced = waitForApi(admin, '/api/admin/sync');
+      await admin.getByRole('button', { name: /হাফেজ যুক্ত করুন/ }).first().click();
+      await synced;
+      await admin.waitForTimeout(1200);
+
+      const check = async (when) => {
+        const s = (await (await admin.request.get(BASE + '/api/state')).json()).state;
+        assert(s.news.length === 0, `${when}: news has ${s.news.length} items`);
+        const names = s.hifzTreeConfig.graduates.map((g) => g.nameBn);
+        assert(!names.includes(graduate.nameBn), `${when}: deleted graduate is back`);
+        assert(names.includes(newGraduate), `${when}: added graduate is missing`);
+        assert(names.length === before.hifzTreeConfig.graduates.length, `${when}: ${names.length} graduates`);
+      };
+      await check('after the edits');
+      // Reload, wait for a poll and make another edit: nothing built-in may be written back.
+      await admin.reload({ waitUntil: 'networkidle' });
+      await admin.getByTestId('admin-dashboard-version').waitFor({ timeout: 15_000 });
+      await admin.waitForTimeout(6000);
+      await openAdminTab(admin, /স্ক্রলিং নিউজ ম্যানেজার|Scrolling News Manager/);
+      assert((await admin.locator('button[aria-label^="Delete "]').count()) === 0, 'news items are listed again after reload');
+      await check('after reload');
+
+      const ctx = await newVisitorContext(browser, { mobile: true });
+      const page = await ctx.newPage();
+      await page.goto(BASE + '/hifz-tree', { waitUntil: 'networkidle' });
+      const text = await page.locator('body').innerText();
+      assert(!text.includes(graduate.nameBn), 'visitor still sees the deleted graduate');
+      assert(text.includes(newGraduate), 'visitor does not see the added graduate');
+      const publicState = await page.evaluate(() => fetch('/api/state').then((r) => r.json()));
+      assert(publicState.state.news.length === 0, 'public state lists news again');
+      for (const item of before.news) assert(!text.includes(item.text), `visitor sees deleted news "${item.text.slice(0, 30)}"`);
+      await ctx.close();
+    });
+
+    await scenario('two admins edit the same notice: the stale save is refused with a clear message and nothing is overwritten', async () => {
+      const ctx = await newVisitorContext(browser);
+      const second = await ctx.newPage();
+      await uiLogin(second, ADMIN.username, adminNewPassword);
+      await openAdminTab(admin, /নোটিশ বোর্ড ম্যানেজার|Notice Board Manager/);
+      await openAdminTab(second, /নোটিশ বোর্ড ম্যানেজার|Notice Board Manager/);
+      const notices = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      const target = notices[notices.length - 1];
+      await admin.locator(`button[aria-label="Edit ${target.title}"]`).first().click();
+      await second.locator(`button[aria-label="Edit ${target.title}"]`).first().click();
+      const firstTitle = `E2E first writer ${RUN_ID}`;
+      await admin.locator('form input[type="text"]').first().fill(firstTitle);
+      await second.locator('form textarea').first().fill('Content typed by the second admin');
+      let synced = waitForApi(admin, '/api/admin/sync');
+      await admin.locator('form button[type="submit"]').first().click();
+      assert((await (await synced).json()).ok, 'first save failed');
+      synced = waitForApi(second, '/api/admin/sync');
+      await second.locator('form button[type="submit"]').first().click();
+      const body = await (await synced).json();
+      assert((body.rejected || []).some((r) => r.reason.startsWith('CONFLICT:')), `no conflict reported: ${JSON.stringify(body)}`);
+      await second.getByText(/অন্য কেউ একই তথ্য পরিবর্তন করেছেন|Someone Else Changed This/).first().waitFor({ timeout: 10_000 });
+      await second.getByText(firstTitle).first().waitFor({ timeout: 10_000 });
+      const after = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      assert(after.find((n) => n.id === target.id).title === firstTitle, 'the first admin\'s title was overwritten');
+      assert(after.length === notices.length, 'other notices were affected');
+      await ctx.close();
+    });
+
+    await scenario('a visitor submission does not reset what an admin is typing in the settings form', async () => {
+      await openAdminTab(admin, /পেইজ সেটিংস|Page Settings/);
+      const phone = (await (await admin.request.get(BASE + '/api/state')).json()).state.settings.phonePrimary;
+      const field = admin.locator(`input[value="${phone}"]`).first();
+      await field.evaluate((el) => el.setAttribute('data-e2e', 'typing'));
+      const typing = admin.locator('input[data-e2e="typing"]');
+      await typing.fill('01999-UNSAVED');
+      const refreshed = admin.waitForResponse((r) => r.url() === `${BASE}/api/state` && r.request().method() === 'GET', { timeout: 20_000 });
+      const api = await apiClient();
+      const res = await api.post('/api/public/submit', {
+        data: { items: [{ key: 'leads', item: { id: 'x', name: `Typing ${RUN_ID}`, phone: randomPhone(), email: '', courseId: '', message: 'x', source: 'Quick Inquiry' } }] },
+      });
+      await api.dispose();
+      assert(res.status() === 200, `submit returned ${res.status()}`);
+      await refreshed;
+      await admin.waitForTimeout(800);
+      assert((await typing.inputValue()) === '01999-UNSAVED', `the field was reset to "${await typing.inputValue()}"`);
+      await typing.fill(phone);
+    });
+
+    await scenario('staff edits made while the server is unreachable show "not saved yet" and are saved when it returns', async () => {
+      const ctx = await newVisitorContext(browser);
+      const page = await ctx.newPage();
+      await uiLogin(page, ADMIN.username, adminNewPassword);
+      await openAdminTab(page, /নোটিশ বোর্ড ম্যানেজার|Notice Board Manager/);
+      const notices = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      const target = notices[0];
+      const offlineTitle = `${target.title} (offline ${RUN_ID})`;
+      await page.route('**/api/**', (route) => route.abort());
+      await page.locator(`button[aria-label="Edit ${target.title}"]`).first().click();
+      await page.locator('form input[type="text"]').first().fill(offlineTitle);
+      await page.locator('form button[type="submit"]').first().click();
+      await page.getByTestId('admin-unsaved-badge').waitFor({ timeout: 15_000 });
+      await page.unroute('**/api/**');
+      await page.getByTestId('admin-unsaved-badge').waitFor({ state: 'detached', timeout: 20_000 });
+      const after = (await (await admin.request.get(BASE + '/api/state')).json()).state.notices;
+      assert(after.find((n) => n.id === target.id).title === offlineTitle, 'the offline edit was not saved after reconnecting');
+      await ctx.close();
+    });
+
+    // ------------------------------------------------------------------------------------
+    // Navigation and metadata
+    // ------------------------------------------------------------------------------------
+
+    await scenario('unknown URLs return 404; titles follow navigation; blog posts have their own title and link', async () => {
+      const ctx = await newVisitorContext(browser, { mobile: true });
+      const page = await ctx.newPage();
+      for (const path of ['/this-page-does-not-exist', '/admin/unknown', '/blog/deep/link']) {
+        const res = await page.goto(BASE + path);
+        assert(res.status() === 404, `${path} returned ${res.status()}`);
+        assert((await page.locator('a[href="/"]').count()) > 0, `${path}: no link back to the home page`);
+      }
+      await page.goto(BASE + '/fees', { waitUntil: 'networkidle' });
+      const feesTitle = await page.title();
+      await page.evaluate(() => {
+        history.pushState({}, '', '/');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await page.waitForFunction((t) => document.title !== t, feesTitle, { timeout: 5_000 });
+
+      await page.goto(BASE + '/blog', { waitUntil: 'networkidle' });
+      await dismissOverlays(page);
+      const blogTitle = await page.title();
+      assert((await page.locator('h1:visible').count()) === 1, 'the blog page does not have exactly one visible h1');
+      const link = page.locator('a[href*="?post="]').first();
+      const href = await link.getAttribute('href');
+      assert(href, 'blog cards are not links');
+      const html = await (await fetch(href)).text();
+      assert(/property="og:type" content="article"/.test(html), 'post URL has no article metadata');
+      await link.click();
+      await page.getByTestId('blog-article-title').waitFor({ timeout: 10_000 });
+      assert(page.url().includes('?post='), 'opening a post did not change the URL');
+      assert((await page.title()) !== blogTitle, 'the tab title did not change to the post title');
+      assert((await page.locator('h1:visible').count()) === 1, 'an open post does not have exactly one visible h1');
+      await ctx.close();
     });
 
     await scenario('POST /api/public/submit with status Admitted stores status New', async () => {
@@ -647,6 +1167,60 @@ async function main() {
       await api.dispose();
     });
 
+    if (dbRelay) {
+      await scenario('database outage: fast 503, the public site still renders, forms report the failure and work again afterwards', async () => {
+        const ctx = await newVisitorContext(browser);
+        const page = await ctx.newPage();
+        const pageErrors = [];
+        page.on('pageerror', (e) => pageErrors.push(e.message));
+        await page.goto(BASE + '/feedback', { waitUntil: 'networkidle' });
+        await dismissOverlays(page);
+        const feedback = page.locator('#guardian-feedback');
+        const form = feedback.locator('form');
+        await form.locator('input[type="text"]').first().fill(`Outage ${RUN_ID}`);
+        await form.locator('input[type="tel"]').first().fill(randomPhone());
+        await form.locator('textarea').fill('Typed while the database was down');
+
+        await dbRelay.cut();
+        try {
+          const timed = async (path) => {
+            const started = Date.now();
+            const res = await fetch(BASE + path);
+            return { status: res.status, code: (await res.json()).code, ms: Date.now() - started };
+          };
+          const first = await timed('/api/state/meta');
+          assert(first.status === 503 && first.code === 'STORE_UNAVAILABLE', `first request: ${JSON.stringify(first)}`);
+          assert(first.ms < 7000, `first 503 took ${first.ms} ms`);
+          const next = await timed('/api/state');
+          assert(next.status === 503 && next.ms < 1500, `following request: ${JSON.stringify(next)}`);
+
+          await form.locator('button[type="submit"]').click();
+          await feedback.locator('[role="alert"]').waitFor({ timeout: 15_000 });
+          assert((await form.locator('textarea').inputValue()) === 'Typed while the database was down', 'text was cleared');
+
+          // A first-time visitor (no cached copy) still gets the website.
+          const freshCtx = await newVisitorContext(browser, { mobile: true });
+          const fresh = await freshCtx.newPage();
+          fresh.on('pageerror', (e) => pageErrors.push(e.message));
+          const res = await fresh.goto(BASE + '/notices', { waitUntil: 'domcontentloaded' });
+          assert(res.status() === 200, `/notices returned ${res.status()} during the outage`);
+          await fresh.locator('header').first().waitFor({ timeout: 20_000 });
+          const text = await fresh.locator('body').innerText();
+          assert(text.trim().length > 500 && !/পেইজটি লোড করতে সাময়িক সমস্যা/.test(text), 'the site did not render during the outage');
+          await freshCtx.close();
+        } finally {
+          await dbRelay.restore();
+        }
+        // The fail-fast window lasts a few seconds; then everything works again.
+        await waitForServer(BASE, 30_000);
+        const accepted = waitForApi(page, '/api/public/submit');
+        await form.locator('button[type="submit"]').click();
+        assert((await accepted).status() === 200, 'the complaint was not accepted after the database came back');
+        await ctx.close();
+        assert(pageErrors.length === 0, `page errors:\n${pageErrors.join('\n')}`);
+      });
+    }
+
     await scenario('login rate limit returns 429 after repeated failures', async () => {
       const api = await apiClient();
       const statuses = [];
@@ -667,6 +1241,7 @@ async function main() {
   } finally {
     await browser.close();
     if (server) server.stop();
+    if (dbRelay) await dbRelay.stop();
   }
 
   const failed = results.filter((r) => !r.ok);

@@ -117,19 +117,48 @@ The legacy `/api/cms-state` endpoints are removed.
 ## Client store changes (`src/store/useCMSStore.tsx`)
 
 The context API stays the same except: `login` returns a Promise; new `storageMode`,
-`changePassword`, and `mustChangePassword` exposure. All existing action implementations keep
-calling `setState`. The persistence layer changes:
+`changePassword`, and `mustChangePassword` exposure. Staff actions keep calling `setState`; the
+persistence layer (`src/store/sync/**`) works as follows:
 
-1. On mount: `GET /api/state` (staff state if the cookie is valid, restoring `currentUser` from `me`).
-2. After each state change (debounced), diff the new state against the last server-confirmed
-   state per key: singletons → `set`; collections → `upsert`/`delete`/`order` per item.
-   - Staff: send all ops to `/api/admin/sync`.
-   - Visitors: send only NEW items of `PUBLIC_CREATE_KEYS` to `/api/public/submit`; other local
-     changes are not persisted.
-3. Poll `/api/state/meta` (staff 5 s, visitors 30 s, only while the tab is visible); refetch when
-   the version changes and no local ops are pending.
-4. `importFullCMSState` / `resetToDefaultData` / release rollback send `replace` + `set` ops.
-5. localStorage keeps only a cache of the public projection for fast first paint.
+1. First paint: the server component embeds the public projection in the page
+   (`initialPublicState`), so visitors never see built-in sample content; the localStorage cache of
+   the public projection and, last, the built-in content are only fallbacks when the server (or its
+   database) cannot be reached. Then `GET /api/state` (staff state if the cookie is valid,
+   restoring `currentUser` from `me`).
+2. Server data is authoritative (`mergeLiveCMSState(..., { authoritative: true })`): a list the
+   server sends is used as it is, even when empty or shorter than the built-in one (collections,
+   Hifz graduates, logo vault, nested lists). Defaults only fill keys the server did not send.
+3. Staff: after each state change (debounced), diff against the last server-confirmed state per
+   key: singletons → `set`; collections → `upsert`/`delete`/`order` per item, sent to
+   `/api/admin/sync`. Every op carries `base`, the version in which this browser last saw its
+   target. The store stamps each row with the version that wrote it and skips ops whose target is
+   newer (**optimistic concurrency per item / per document**); the client then shows a conflict
+   message and reloads. A sync that could not reach the server is retried; the header shows
+   "not saved yet" and the browser warns before the tab is closed.
+4. Visitors never persist local state. Public forms call `submitInquiry` /
+   `submitGuardianComplaint` / `submitCareerApplication` (→ `POST /api/public/submit`, sent at
+   once with `fetch keepalive`) or the virtual-office check-in, wait for the answer, and show the
+   success screen with the **server's id** only when it was stored; otherwise the form stays
+   filled in with a localized reason (`publicSubmitError`).
+5. Poll `/api/state/meta` (staff 5 s, visitors 30 s, only while the tab is visible); refetch when
+   the version changes and no local ops are pending. A background refresh keeps the previous
+   objects for unchanged keys (`reuseUnchanged`), so forms being typed into are not reset.
+6. `importFullCMSState` / `resetToDefaultData` / release rollback send `replace` + `set` ops for
+   the keys the signed-in role may fully manage.
+
+### Leads from public forms
+
+`planPublicSubmit` de-duplicates only the same student (same guardian phone **and** same student
+name): that submission is appended to the existing lead's notes. Another child on the same phone
+gets a lead of its own with a note linking it to the sibling's lead, and a full admission form is
+never dropped. Virtual-office check-ins follow the same rule.
+
+### Database outage
+
+Driver failures map to `StoreUnavailableError` → HTTP 503 (`STORE_UNAVAILABLE`). Connections wait
+at most 4 s (`acquireTimeout`, overridable in `DATABASE_URL`) and after a failure the store answers
+503 immediately for 5 s instead of queuing every request. Pages keep rendering with the last
+public content the process embedded (or the browser's cached copy / built-in content).
 
 ## Environment variables
 
