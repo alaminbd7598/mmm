@@ -13,7 +13,7 @@ import {
 import { useCMS } from '../store/useCMSStore';
 import { resolveVersionManagerConfig } from '../utils/versionLogic';
 import { findHafizByCertificateCode } from '../utils/admissionToken2027Logic';
-import { generateHafizCertificatePdf } from '../utils/certificatePdf';
+import { generateHafizCertificatePdf } from '../utils/certificatePdfLazy';
 
 export const ReleaseNotesModal: React.FC<{
   isOpen: boolean;

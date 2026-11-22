@@ -28,6 +28,13 @@ import { stateToOps } from './state-ops';
 
 export const BCRYPT_COST = 12;
 
+/**
+ * Cost for the demo store's sample passwords. They are public (shown on the demo login page), so a
+ * strong cost protects nothing, and hashing five of them at BCRYPT_COST kept the first visitor
+ * after every cold start waiting for seconds. Real passwords always use BCRYPT_COST.
+ */
+export const DEMO_BCRYPT_COST = 4;
+
 export function buildSeedState(): CMSState {
   return mergeLiveCMSState(seedContent as Record<string, unknown>, INITIAL_CMS_STATE);
 }
@@ -49,7 +56,7 @@ export async function buildSeedPlan(mode: StorageMode): Promise<SeedPlan> {
     await Promise.all(
       state.users.map(async (user) => {
         const password = DEMO_STAFF_PASSWORDS[user.id];
-        if (password) passwordHashes[user.id] = await bcrypt.hash(password, BCRYPT_COST);
+        if (password) passwordHashes[user.id] = await bcrypt.hash(password, DEMO_BCRYPT_COST);
       })
     );
   }

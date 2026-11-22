@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { jsPDF } from 'jspdf';
 import {
   ArrowDownUp,
   Award,
@@ -47,7 +46,7 @@ import {
   buildHafizCertificateCode,
   sortHifzLineage,
 } from '../utils/portalAndHifzLogic';
-import { generateHafizCertificatePdf } from '../utils/certificatePdf';
+import { generateHafizCertificatePdf } from '../utils/certificatePdfLazy';
 import { HafezInfoDrawer, LineageTimeline } from './LineageTimeline';
 
 export interface FramedPhotoModalData {
@@ -1333,7 +1332,9 @@ export const ExamScheduleAndSmartCampusSection: React.FC<
     },
   ];
 
-  const handleDownloadExamRoutinePDF = () => {
+  const handleDownloadExamRoutinePDF = async () => {
+    // Downloaded on demand: the PDF library is not part of the page bundle.
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const termTitle =
       sessionTermTabs.find((t) => t.id === selectedSessionTerm)?.label ||

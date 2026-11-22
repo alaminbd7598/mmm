@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { motion, type Variants } from 'motion/react';
 import {
   ArrowLeft,
@@ -76,7 +76,6 @@ import {
   HomeRegistrationSplitSection,
 } from './HomeConversionAndFaqSection';
 import { CareerPortalPage } from './CareerPortalPage';
-import { BlogPortalPage } from './BlogPortalPage';
 import { InteractiveFeeCalculator } from './InteractiveFeeCalculator';
 import { MadrasahInfographicsSection } from './MadrasahInfographicsSection';
 import { MobileBottomBar } from './MobileBottomBar';
@@ -103,6 +102,9 @@ import {
   resolveGoogleMapsEmbedUrl,
 } from '../utils/careerAndMapsLogic';
 import { isValidExternalPortalUrl, resolveExternalPortals } from '../utils/portalAndHifzLogic';
+
+// The blog (and its Markdown renderer) is downloaded when a visitor opens it.
+const BlogPortalPage = lazy(() => import('./BlogPortalPage').then((m) => ({ default: m.BlogPortalPage })));
 
 interface PublicWebsiteProps {
   onOpenAdmin: (role?: AdminRole) => void;
@@ -3447,7 +3449,11 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({ onOpenAdmin }) => 
         {/* ===================================================================
             /blog — OFFICIAL INSTITUTIONAL BLOG & ARTICLES
            =================================================================== */}
-        {currentPage === 'blog' && <BlogPortalPage />}
+        {currentPage === 'blog' && (
+          <Suspense fallback={<div className="min-h-[60vh]" role="status" aria-label="Loading" />}>
+            <BlogPortalPage />
+          </Suspense>
+        )}
 
         {/* ===================================================================
             /contact — SPLIT CONTACT PORTAL + VIRTUAL OFFICE DESK + DUAL GOOGLE MAPS

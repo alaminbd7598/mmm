@@ -14,7 +14,6 @@ import {
   Printer,
   Sun,
 } from 'lucide-react';
-import { jsPDF } from 'jspdf';
 import { useCMS } from '../store/useCMSStore';
 import { AccommodationMode } from '../types/cms';
 import { calculateAdmissionFeeSummary, toBengaliDigits } from '../utils/cmsLogic';
@@ -656,8 +655,10 @@ export const InteractiveFeeCalculator: React.FC<InteractiveFeeCalculatorProps> =
     }
   };
 
-  const handleDownloadA4Pdf = () => {
+  const handleDownloadA4Pdf = async () => {
     try {
+      // Downloaded on demand: the PDF library is not part of the page bundle.
+      const { jsPDF } = await import('jspdf');
       const canvas = buildA4SummaryCanvas();
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF({
